@@ -12,3 +12,51 @@
 ## Specification
 
 Consult the [full specification](https://github.com/canonical/cnf) for examples and details of the format.
+
+## Example
+
+This simple example shows the conversion of cnf to json and back:
+
+```cnf
+key: "value"
+nested.key: 0xff
+string:
+    """
+    Hello
+    world
+    """
+```
+
+One call decodes it to JSON:
+
+```go
+json, err := cnfjson.ToJSON(doc)
+```
+
+This results in:
+
+```json
+{"key":"value","nested":{"key":255},"string":"Hello\nworld\n"}
+```
+
+One call converts it back:
+
+```go
+cnf, err := cnfjson.FromJSON(json)
+```
+
+The value is preserved, but the spelling changed slightly as it
+lacks the metadata:
+
+```cnf
+key: "value"
+nested:
+    key: 255
+string:
+    '''
+    Hello
+    world
+    '''
+```
+
+For more careful transformations and pretty printing, see `cnfpretty`.
