@@ -63,7 +63,7 @@ const (
 // the inline forms are the only ones an array holds. Number
 // forms pass through verbatim but one: the cnf grammar reads
 // e alone, so an uppercase exponent letter folds to lowercase.
-func ParseJSON(data []byte) (any, error) {
+func ParseJSON(data []byte) (*cnfast.Item, error) {
 	root, err := walk(data)
 	if err != nil {
 		return nil, err

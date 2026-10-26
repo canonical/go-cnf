@@ -3,11 +3,11 @@
 
 ## Packages 
  
-- [go-cnf/cnfast](https://github.com/canonical/go-cnf/tree/main/cnfast) - Original AST parser and renderer built during development. 
-- [go-cnf/cnfpretty](https://github.com/canonical/go-cnf/tree/main/cnfpretty) - Pretty printer for cnfast. 
-- [go-cnf/cnfjson](https://github.com/canonical/go-cnf/tree/main/cnfjson) - Text-preserving bridge between cnf and json. 
-- [go-cnf/cnfmap](https://github.com/canonical/go-cnf/tree/main/cnfmap) - Simple Marshaler and Unmarshaler for Go values. 
-- [go-cnf/cnftest](https://github.com/canonical/go-cnf/tree/main/cnftest) - Harness to run the conformance tests.
+- [go-cnf/cnfast](https://pkg.go.dev/github.com/canonical/go-cnf/cnfast) - Original AST parser and renderer built during development. 
+- [go-cnf/cnfpretty](https://pkg.go.dev/github.com/canonical/go-cnf/cnfpretty) - Pretty printer for cnfast. 
+- [go-cnf/cnfjson](https://pkg.go.dev/github.com/canonical/go-cnf/cnfjson) - Text-preserving bridge between cnf and json. 
+- [go-cnf/cnfmap](https://pkg.go.dev/github.com/canonical/go-cnf/cnfmap) - Simple Marshaler and Unmarshaler for Go values. 
+- [go-cnf/cnftest](https://pkg.go.dev/github.com/canonical/go-cnf/cnftest) - Harness to run the conformance tests.
 
 ## Specification
 

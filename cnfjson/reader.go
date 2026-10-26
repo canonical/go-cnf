@@ -31,18 +31,14 @@ import (
 	"github.com/canonical/go-cnf/cnfpretty"
 )
 
-// RenderJSON renders one AST - a *cnfast.Item, the root - as
+// RenderJSON renders one AST - the root *cnfast.Item - as
 // the JSON text it represents: one JSON value, structurally
 // identical to the cnf. The root is usually a map, but may be
 // any value. The paths unfold first - every dotted key splits
 // into nesting levels, the levels merging by key - because
 // JSON has no dotted keys: the unfolded tree is the JSON
 // shape.
-func RenderJSON(ast any) ([]byte, error) {
-	root, ok := ast.(*cnfast.Item)
-	if !ok {
-		return nil, fmt.Errorf("cannot render %T", ast)
-	}
+func RenderJSON(root *cnfast.Item) ([]byte, error) {
 	// The unfold mutates the tree it is given, so the render
 	// clones first: the caller's AST is never touched.
 	root = cnfpretty.Clone(root)

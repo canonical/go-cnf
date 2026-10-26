@@ -35,12 +35,8 @@ type RenderOptions struct{}
 // block, indented one level deeper than its item. A caller
 // who wants the tree re-spelled applies cnfpretty first:
 // the reformat owns every re-spelling, the render none.
-func Render(ast any, opts *RenderOptions) ([]byte, error) {
+func Render(root *Item, opts *RenderOptions) ([]byte, error) {
 	var b strings.Builder
-	root, ok := ast.(*Item)
-	if !ok {
-		return nil, fmt.Errorf("cannot render %T", ast)
-	}
 	// The root value is a keyless item. The comment runs
 	// render around the value: the inline forms on the item's
 	// line with their trailing comment, the block forms

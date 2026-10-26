@@ -31,13 +31,9 @@ import (
 // numbers are IEEE754 doubles, and dotted key paths merge into
 // nested maps, a scalar meeting a map at one path refusing.
 func Unmarshal(data []byte) (any, error) {
-	root, err := cnfast.Parse(data, nil)
+	item, err := cnfast.Parse(data, nil)
 	if err != nil {
 		return nil, err
-	}
-	item, ok := root.(*cnfast.Item)
-	if !ok {
-		return nil, fmt.Errorf("cannot decode document: no root item")
 	}
 	return value(item.Value)
 }

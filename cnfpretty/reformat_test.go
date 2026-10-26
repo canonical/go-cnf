@@ -159,7 +159,9 @@ func TestWrapRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := cnfprettyClone(ast)
+	// The apply mutates the tree it is given, so the
+	// round trip works on a clone.
+	root := Clone(ast)
 	opts := Options{SoftWrapStringFromWidth: 3, HardWrapStringFromWidth: 10}
 	if err := Apply(root, &opts); err != nil {
 		t.Fatal(err)
@@ -177,7 +179,7 @@ func TestWrapRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-parse error: %s", err)
 	}
-	m := reparsed.(*cnfast.Item).Value.(*cnfast.Map)
+	m := reparsed.Value.(*cnfast.Map)
 	got := m.Items[0].Value.(*cnfast.Str).Data
 	if got != "one two three" {
 		t.Fatalf("re-parsed value=%q want %q", got, "one two three")
@@ -218,10 +220,4 @@ func TestSetResetsText(t *testing.T) {
 	if s.Text != nil {
 		t.Fatalf("Text=%q want nil", s.Text)
 	}
-}
-
-// cnfprettyClone clones one parsed root for the round-trip
-// test: the apply mutates the tree it is given.
-func cnfprettyClone(ast any) *cnfast.Item {
-	return Clone(ast.(*cnfast.Item))
 }

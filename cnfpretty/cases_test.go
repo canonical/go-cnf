@@ -78,7 +78,7 @@ func convert(direction, source string, reformat cnftest.Reformat) (string, error
 // settings: the corpus's vocabulary mapped onto cnfpretty's
 // Options, the tree cloned first - the reformat mutates what
 // it is given - then applied, then rendered byte-faithfully.
-func renderPretty(ast any, reformat cnftest.Reformat) ([]byte, error) {
+func renderPretty(root *cnfast.Item, reformat cnftest.Reformat) ([]byte, error) {
 	opts := cnfpretty.Options{
 		UnfoldListFromItems:     reformat.UnfoldListFromItems,
 		UnfoldMapFromItems:      reformat.UnfoldMapFromItems,
@@ -93,7 +93,6 @@ func renderPretty(ast any, reformat cnftest.Reformat) ([]byte, error) {
 		Reindent:                reformat.Reindent,
 		IgnoreComments:          reformat.IgnoreComments,
 	}
-	root := ast.(*cnfast.Item)
 	root = cnfpretty.Clone(root)
 	if err := cnfpretty.Apply(root, &opts); err != nil {
 		return nil, err

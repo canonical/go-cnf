@@ -139,7 +139,10 @@ func keyPath(key []*Str) string {
 type ParseOptions struct{}
 
 // Parse reads a cnf document into its AST: the file's one
-// value. The shape is decided by the first structural line: a
+// value, wrapped in the keyless root Item. The root carries
+// the document's top-level comment runs, and its Value field
+// holds the value itself. The shape is decided by the first
+// structural line: a
 // pair-shaped line opens a map, "- " a block list, "---" a
 // list fence, a fence delimiter a fence, and anything else is
 // an inline value that must end the file. An empty file is an
@@ -149,7 +152,7 @@ type ParseOptions struct{}
 // The options, when given, carry the parse settings. None
 // exist yet; the parameter mirrors RenderOptions for symmetry.
 // The nil value is the default parse.
-func Parse(data []byte, opts *ParseOptions) (any, error) {
+func Parse(data []byte, opts *ParseOptions) (*Item, error) {
 	if !utf8.Valid(data) {
 		return nil, invalidUTF8Err(data)
 	}
@@ -188,7 +191,7 @@ func invalidUTF8Err(data []byte) error {
 // The opening comment run must sit at the top prefix - a
 // deeper comment matches no enclosing block - and no
 // structural line may follow the value.
-func (p *parser) parseTop() (any, error) {
+func (p *parser) parseTop() (*Item, error) {
 	first, ok := p.peekStruct("")
 	if err := cmtIndentOK(p.pending, ""); err != nil {
 		return nil, err

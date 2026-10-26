@@ -197,43 +197,40 @@ func TestRenderBareWordValue(t *testing.T) {
 // respells, the record having been made for the inline
 // shape.
 func TestWriteStrClosingLine(t *testing.T) {
-	for _, tc := range []struct {
+	var cases = []struct {
 		str   string
 		quote QuoteKind
 		block bool
 		text  []string
 		want  string
-	}{
-		{
-			// A line equal to the escaped delimiter: one
-			// quote escapes, the fence stays open.
-			str:   "before\n\"\"\"\nafter\n",
-			quote: DoubleFenced,
-			block: true,
-			want:  "    \"\"\"\n    before\n    \\\"\"\"\n    after\n    \"\"\"\n",
-		},
-		{
-			// A raw-family value with a delimiter-equal
-			// line: the render escalates to the escaped
-			// family, whose delimiter differs from the
-			// line.
-			str:   "one\n'''\ntwo\n",
-			quote: SingleFenced,
-			block: true,
-			want:  "    \"\"\"\n    one\n    '''\n    two\n    \"\"\"\n",
-		},
-		{
-			// A compact record (one element, no tail)
-			// demanded as a block: the content respells, a
-			// marker holding the value's missing final
-			// newline away.
-			str:   "it\"",
-			quote: DoubleFenced,
-			block: true,
-			text:  []string{`it\"`},
-			want:  "    \"\"\"\n    it\"\\\n    \"\"\"\n",
-		},
-	} {
+	}{{
+		// A line equal to the escaped delimiter: one
+		// quote escapes, the fence stays open.
+		str:   "before\n\"\"\"\nafter\n",
+		quote: DoubleFenced,
+		block: true,
+		want:  "    \"\"\"\n    before\n    \\\"\"\"\n    after\n    \"\"\"\n",
+	}, {
+		// A raw-family value with a delimiter-equal
+		// line: the render escalates to the escaped
+		// family, whose delimiter differs from the
+		// line.
+		str:   "one\n'''\ntwo\n",
+		quote: SingleFenced,
+		block: true,
+		want:  "    \"\"\"\n    one\n    '''\n    two\n    \"\"\"\n",
+	}, {
+		// A compact record (one element, no tail)
+		// demanded as a block: the content respells, a
+		// marker holding the value's missing final
+		// newline away.
+		str:   "it\"",
+		quote: DoubleFenced,
+		block: true,
+		text:  []string{`it\"`},
+		want:  "    \"\"\"\n    it\"\\\n    \"\"\"\n",
+	}}
+	for _, tc := range cases {
 		s := &Str{Data: tc.str, Quote: tc.quote, Block: tc.block, Text: tc.text}
 		var b strings.Builder
 		if err := writeStr(&b, s, "    "); err != nil {
@@ -251,7 +248,7 @@ func TestWriteStrClosingLine(t *testing.T) {
 			t.Errorf("%q: re-parse: %s", tc.str, err)
 			continue
 		}
-		got := ast.(*Item).Value.(*Map).Items[0].Value.(*Str).Data
+		got := ast.Value.(*Map).Items[0].Value.(*Str).Data
 		if got != tc.str {
 			t.Errorf("%q: re-parsed value %q, the value changed", tc.str, got)
 		}

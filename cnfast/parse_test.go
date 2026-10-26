@@ -146,7 +146,7 @@ func TestParseRecords(t *testing.T) {
 			t.Errorf("parse %q: %s", tc.src, err)
 			continue
 		}
-		s := ast.(*Item).Value.(*Map).Items[0].Value.(*Str)
+		s := ast.Value.(*Map).Items[0].Value.(*Str)
 		if s.Data != tc.str {
 			t.Errorf("%q: Str=%q want %q", tc.src, s.Data, tc.str)
 		}

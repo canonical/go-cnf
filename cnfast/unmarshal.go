@@ -29,7 +29,7 @@ import (
 // scalar, list, map. Key segments unmarshal directly (their
 // fields match Str's tags); only the any-typed values need the
 // dispatch.
-func UnmarshalJSON(data []byte) (any, error) {
+func UnmarshalJSON(data []byte) (*Item, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
