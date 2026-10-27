@@ -41,7 +41,7 @@ import (
 func RenderJSON(root *cnfast.Item) ([]byte, error) {
 	// The unfold mutates the tree it is given, so the render
 	// clones first: the caller's AST is never touched.
-	root = cnfpretty.Clone(root)
+	root = cnfast.Clone(root)
 	unfold := cnfpretty.Options{UnfoldMapFromItems: 1, UnfoldPathFromDepth: 1}
 	if err := cnfpretty.Apply(root, &unfold); err != nil {
 		return nil, err

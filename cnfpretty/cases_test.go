@@ -93,7 +93,7 @@ func renderPretty(root *cnfast.Item, reformat cnftest.Reformat) ([]byte, error) 
 		Reindent:                reformat.Reindent,
 		IgnoreComments:          reformat.IgnoreComments,
 	}
-	root = cnfpretty.Clone(root)
+	root = cnfast.Clone(root)
 	if err := cnfpretty.Apply(root, &opts); err != nil {
 		return nil, err
 	}

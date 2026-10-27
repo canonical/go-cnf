@@ -161,7 +161,7 @@ func TestWrapRoundTrip(t *testing.T) {
 	}
 	// The apply mutates the tree it is given, so the
 	// round trip works on a clone.
-	root := Clone(ast)
+	root := cnfast.Clone(ast)
 	opts := Options{SoftWrapStringFromWidth: 3, HardWrapStringFromWidth: 10}
 	if err := Apply(root, &opts); err != nil {
 		t.Fatal(err)
