@@ -25,11 +25,7 @@ import (
 // one line; anything wider breaks one field per line.
 const inlineWidth = 40
 
-// MarshalJSON renders v in the compact review form: objects
-// multi-line with one field per line, arrays inline with their
-// brackets and commas on one line - and any nested value small
-// enough to fit the inline width compacted to a single line, so
-// positions read as {"line":1,"col":1}.
+// MarshalJSON renders v in the compact review form.
 func MarshalJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

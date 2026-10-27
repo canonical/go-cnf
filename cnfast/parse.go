@@ -134,24 +134,10 @@ func keyPath(key []*Str) string {
 
 // ParseOptions are the settings of one Parse call. None exist
 // yet; the parameter is there so that settings can be added
-// later without another breaking change. The nil value is
-// the default parse.
+// later without another breaking change.
 type ParseOptions struct{}
 
-// Parse reads a cnf document into its AST: the file's one
-// value, wrapped in the keyless root Item. The root carries
-// the document's top-level comment runs, and its Value field
-// holds the value itself. The shape is decided by the first
-// structural line: a
-// pair-shaped line opens a map, "- " a block list, "---" a
-// list fence, a fence delimiter a fence, and anything else is
-// an inline value that must end the file. An empty file is an
-// empty map. Whatever the shape, no structural line may
-// follow the value.
-//
-// The options, when given, carry the parse settings. None
-// exist yet; the parameter mirrors RenderOptions for symmetry.
-// The nil value is the default parse.
+// Parse reads a cnf document into its AST.
 func Parse(data []byte, opts *ParseOptions) (*Item, error) {
 	if !utf8.Valid(data) {
 		return nil, invalidUTF8Err(data)

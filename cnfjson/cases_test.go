@@ -46,13 +46,13 @@ func skip(direction string) error {
 func convert(direction, source string, reformat cnftest.Reformat) (string, error) {
 	switch direction {
 	case "to-json":
-		out, err := cnfjson.ToJSON([]byte(source))
+		out, err := cnfjson.ToJSON([]byte(source), nil)
 		if err != nil {
 			return "", err
 		}
 		return string(out), nil
 	case "from-json":
-		out, err := cnfjson.FromJSON([]byte(source))
+		out, err := cnfjson.FromJSON([]byte(source), nil)
 		if err != nil {
 			return "", err
 		}
@@ -88,11 +88,11 @@ func assert(format, kind, want, got string) error {
 // usual trim. A side that does not re-translate is a broken
 // output, not a mismatch.
 func sameValueJSON(want, got string) error {
-	gotJSON, err := cnfjson.ToJSON([]byte(got))
+	gotJSON, err := cnfjson.ToJSON([]byte(got), nil)
 	if err != nil {
 		return fmt.Errorf("cnf does not re-translate: %s", err)
 	}
-	wantJSON, err := cnfjson.ToJSON([]byte(want))
+	wantJSON, err := cnfjson.ToJSON([]byte(want), nil)
 	if err != nil {
 		return fmt.Errorf("cnf block does not translate: %s", err)
 	}

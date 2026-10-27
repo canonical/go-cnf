@@ -17,6 +17,7 @@ package cnfpretty
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/canonical/go-cnf/cnfast"
@@ -128,13 +129,11 @@ func TestWrapStr(t *testing.T) {
 			if !reflect.DeepEqual(s.Text, tc.text) {
 				t.Fatalf("Text=%q want %q", s.Text, tc.text)
 			}
-			// The value never changes: the Text decodes back
+			// The value never changes: the recorded Text,
+			// rebuilt as a fence and parsed, decodes back
 			// to the very Str the wrap wrapped.
-			if err := s.Decode(); err != nil {
-				t.Fatalf("decode error: %s", err)
-			}
-			if s.Data != tc.str {
-				t.Fatalf("decoded=%q want the untouched value %q", s.Data, tc.str)
+			if got := decodeStr(t, s); got != tc.str {
+				t.Fatalf("decoded=%q want the untouched value %q", got, tc.str)
 			}
 			// The wrap flips the spelling: a fence holds the
 			// lines, the escaped family carrying the
@@ -197,12 +196,11 @@ func TestWrapStaleErrors(t *testing.T) {
 		t.Fatal("did not wrap")
 	}
 	// Someone changes the value without Set: the recorded
-	// spelling is now stale.
+	// spelling is now stale. The string stands alone as the
+	// document - the top-level value - so the render checks
+	// it directly.
 	s.Data = "changed"
-	_, err := cnfast.Render(&cnfast.Item{Value: &cnfast.Map{Items: []*cnfast.Item{{
-		Key:   []*cnfast.Str{{Data: "a", Quote: cnfast.Unquoted}},
-		Value: s,
-	}}, Block: true}}, nil)
+	_, err := cnfast.Render(&cnfast.Item{Value: s}, nil)
 	if err == nil {
 		t.Fatal("rendered a stale spelling without error")
 	}
@@ -220,4 +218,27 @@ func TestSetResetsText(t *testing.T) {
 	if s.Text != nil {
 		t.Fatalf("Text=%q want nil", s.Text)
 	}
+}
+
+// decodeStr verifies one wrapped string's Text through the
+// parser alone: the elements rebuild as a top-level fence -
+// each element's tail the end of its source line, the
+// terminator a line end, the marker the line's last
+// character - and the document parses, the value arriving
+// from Text and nothing else. Str is never consulted, so
+// the check is the record's alone to pass.
+func decodeStr(t *testing.T, s *cnfast.Str) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("\"\"\"\n")
+	for _, el := range s.Text {
+		b.WriteString(strings.TrimSuffix(el, "\n"))
+		b.WriteString("\n")
+	}
+	b.WriteString("\"\"\"\n")
+	ast, err := cnfast.Parse([]byte(b.String()), nil)
+	if err != nil {
+		t.Fatalf("recorded elements do not parse: %s", err)
+	}
+	return ast.Value.(*cnfast.Str).Data
 }

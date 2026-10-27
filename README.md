@@ -30,7 +30,7 @@ string:
 One call decodes it to JSON:
 
 ```go
-json, err := cnfjson.ToJSON(doc)
+json, err := cnfjson.ToJSON(doc, nil)
 ```
 
 This results in:
@@ -42,7 +42,7 @@ This results in:
 One call converts it back:
 
 ```go
-cnf, err := cnfjson.FromJSON(json)
+cnf, err := cnfjson.FromJSON(json, nil)
 ```
 
 The value is preserved, but the spelling changed slightly as it

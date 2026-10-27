@@ -22,19 +22,10 @@ import (
 
 // RenderOptions are the settings of one Render call. None
 // exist yet; the parameter exists so that render-side knobs
-// can be added later without another breaking change. The
-// nil value is the default render.
+// can be added later without another breaking change.
 type RenderOptions struct{}
 
-// Render writes an AST back as cnf text, byte for byte as
-// the parse recorded it: every layout and every spelling
-// stays as it was read. The AST stores the spellings that
-// matter - quote styles, number spellings - so the round
-// trip cnf → AST → cnf reproduces the original text for
-// canonical spellings. A nested map value renders as a
-// block, indented one level deeper than its item. A caller
-// who wants the tree re-spelled applies cnfpretty first:
-// the reformat owns every re-spelling, the render none.
+// Render renders the provided hierarchy as cnf text.
 func Render(root *Item, opts *RenderOptions) ([]byte, error) {
 	var b strings.Builder
 	// The root value is a keyless item. The comment runs
@@ -201,10 +192,12 @@ func writeStr(b *strings.Builder, s *Str, indent string) error {
 	return err
 }
 
-// Decode decodes the string's value. If Text is set, it is
-// decoded and stored back into Str; if not, Str is left as is.
-// Either way the caller reads the decoded value from Str after
-// this call, without checking which of the two fields held it.
+// decode writes the decoded value of Text into b
+// without storing it into Str. The render uses it to check
+// that Text still matches Str before writing either one: if
+// they disagree, someone changed Str without calling Set,
+// and the render fails rather than guess which of the two is
+// current.
 //
 // Decoding follows the same rules as parsing a fence: each
 // element is unescaped for the triple-quoted family, a
@@ -212,24 +205,9 @@ func writeStr(b *strings.Builder, s *Str, indent string) error {
 // the next element (the marker is dropped, and no newline is
 // inserted), and every other tail - the terminator - is kept
 // as part of the value. The recorded elements carry their own
-// tails, so the decode copies them plainly.
-func (s *Str) Decode() error {
-	if s.Text == nil {
-		return nil
-	}
-	var b strings.Builder
-	if err := s.decode(&b); err != nil {
-		return err
-	}
-	s.Data = b.String()
-	return nil
-}
-
-// decode writes the decoded value of Text into b without
-// storing it into Str. The render uses it to check that Text
-// still matches Str before writing either one: if they
-// disagree, someone changed Str without calling Set, and the
-// render fails rather than guess which of the two is current.
+// tails, so the decode copies them plainly. With Text unset,
+// Str is the decoded value already, and the decode writes it
+// as is.
 func (s *Str) decode(b *strings.Builder) error {
 	if s.Text == nil {
 		b.WriteString(s.Data)
@@ -266,28 +244,6 @@ func (s *Str) decode(b *strings.Builder) error {
 			b.WriteString("\n")
 		}
 	}
-	return nil
-}
-
-// Encode breaks s into Text elements for the block fence,
-// the mirror of Decode: where Decode reads recorded elements
-// back into Str, Encode spells Str out into elements and
-// stores them into Text, recording the family it spelled them
-// in. It drives encode with a callback that collects each
-// encoded line, so the elements are exactly what the fence
-// writer emits - no separate spelling to keep in step. The
-// caller reads the elements from Text after this call; they
-// carry their own tails and no indent.
-func (s *Str) Encode() error {
-	var throwaway strings.Builder
-	var text []string
-	query, err := s.encode(&throwaway, "", func(line string) {
-		text = append(text, line)
-	})
-	if err != nil {
-		return err
-	}
-	s.Text, s.Quote = text, query
 	return nil
 }
 
@@ -815,10 +771,7 @@ func quoteString(b *strings.Builder, s string, q QuoteKind, force bool) {
 	}
 }
 
-// Quote spells one string in the asked family, returning the
-// text. See quoteString for the spelling. The spelling is the
-// key-position one: a bare word asked bare stays bare, the
-// caller deciding whether that reading fits.
+// Quote returns s quoted and escaped in the q family.
 func Quote(s string, q QuoteKind) string {
 	var b strings.Builder
 	quoteString(&b, s, q, false)

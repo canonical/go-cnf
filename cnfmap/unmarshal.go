@@ -23,13 +23,8 @@ import (
 	"github.com/canonical/go-cnf/cnfast"
 )
 
-// Unmarshal decodes a cnf document: one value of any shape -
-// usually a map, whose keys are strings and values are float64,
-// string, bool, nil, []any, or map[string]any. The grammar is
-// cnfast's: the document parses into the AST, and this walk reads
-// the tree as plain Go values. The value model is cnfmap's own:
-// numbers are IEEE754 doubles, and dotted key paths merge into
-// nested maps, a scalar meeting a map at one path refusing.
+// Unmarshal decodes cnf text into a Go value: `float64`, `string`, `bool`,
+// `nil`, `[]any`, or `map[string]any`.
 func Unmarshal(data []byte) (any, error) {
 	item, err := cnfast.Parse(data, nil)
 	if err != nil {

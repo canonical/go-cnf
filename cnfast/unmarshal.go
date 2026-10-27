@@ -20,15 +20,7 @@ import (
 	"fmt"
 )
 
-// UnmarshalJSON reads the JSON form of an AST - the review form
-// that MarshalJSON produces - back into AST nodes. The document
-// is always an item, so the top-level form is the keyless root
-// item, dispatched on its "value" field - anything else at the
-// top violates the invariant and is rejected. The defining
-// field's presence says what each nested value is: str, num,
-// scalar, list, map. Key segments unmarshal directly (their
-// fields match Str's tags); only the any-typed values need the
-// dispatch.
+// UnmarshalJSON reads the JSON produced by MarshalJSON.
 func UnmarshalJSON(data []byte) (*Item, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {

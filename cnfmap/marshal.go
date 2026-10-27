@@ -25,25 +25,17 @@ import (
 	"github.com/canonical/go-cnf/cnfast"
 )
 
-// pairIndent is the indent a pair records when it holds a
-// block value: the writer's fixed one-level step, the same
-// one the render falls back on when a tree arrives with no
-// indent recorded.
-const pairIndent = "    "
+const defaultIndent = "    "
 
 // Marshal encodes one Go value as a cnf document. The walk
 // is reflection-based, so every shape Go offers is read
 // structurally:
 //
-//   - nil, a nil pointer, a nil slice, and a nil map spell
-//     null.
-//   - bool, string, and every integer and float kind spell
-//     themselves. A float NaN or infinity is an error: cnf
-//     has no spelling for either.
-//   - a slice or an array is a list.
-//   - a map is a map. The keys must be strings or integers.
-//     The pairs are written in sorted key order.
-//   - a pointer or an interface is followed.
+//   - bool, nil
+//   - string, integer and float kinds (NaN/inf unsupported)
+//   - slice, array
+//   - map with string or int keys
+//   - pointer and interface are followed
 //
 // .
 func Marshal(v any) ([]byte, error) {
@@ -158,7 +150,7 @@ func (b *builder) value(rv reflect.Value, inline bool) (cnfast.Value, error) {
 			}
 			if !inline {
 				if m, ok := av.(*cnfast.Map); ok && m.Block {
-					pair.Indent = pairIndent
+					pair.Indent = defaultIndent
 				}
 			}
 			pairs = append(pairs, pair)

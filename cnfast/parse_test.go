@@ -17,6 +17,7 @@ package cnfast
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +40,7 @@ import (
 // one document: parsing it, then rendering the result, must
 // reproduce the source verbatim.
 func TestParseRenderRoundTrip(t *testing.T) {
-	for _, src := range []string{
+	var sources = []string{
 		// a single quoted string
 		"a: 'x'\n",
 
@@ -83,7 +84,8 @@ func TestParseRenderRoundTrip(t *testing.T) {
 		// families record too
 		`a: "x\ny"` + "\n",
 		"a: 'raw'\n",
-	} {
+	}
+	for _, src := range sources {
 		ast, err := Parse([]byte(src), nil)
 		if err != nil {
 			t.Errorf("parse %q: %s", src, err)
@@ -106,7 +108,7 @@ func TestParseRenderRoundTrip(t *testing.T) {
 // interior standing alone - is the contract the render and
 // the wrap both build on.
 func TestParseRecords(t *testing.T) {
-	for _, tc := range []struct {
+	var cases = []struct {
 		src  string
 		str  string
 		text []string
@@ -140,7 +142,8 @@ func TestParseRecords(t *testing.T) {
 		src:  "a: '''Single\\nline.'''\n",
 		str:  `Single\nline.`,
 		text: []string{`Single\nline.`},
-	}} {
+	}}
+	for _, tc := range cases {
 		ast, err := Parse([]byte(tc.src), nil)
 		if err != nil {
 			t.Errorf("parse %q: %s", tc.src, err)
@@ -153,12 +156,17 @@ func TestParseRecords(t *testing.T) {
 		if !reflect.DeepEqual(s.Text, tc.text) {
 			t.Errorf("%q: Text=%q want %q", tc.src, s.Text, tc.text)
 		}
-		if err := s.Decode(); err != nil {
+		// The recorded elements decode to the very value:
+		// Text is the spelling the render writes back, so
+		// its decode must agree with what the parse stored
+		// in Str.
+		var b strings.Builder
+		if err := s.decode(&b); err != nil {
 			t.Errorf("%q: decode: %s", tc.src, err)
 			continue
 		}
-		if s.Data != tc.str {
-			t.Errorf("%q: decoded=%q want %q", tc.src, s.Data, tc.str)
+		if b.String() != tc.str {
+			t.Errorf("%q: decoded=%q want %q", tc.src, b.String(), tc.str)
 		}
 	}
 }

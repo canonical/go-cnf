@@ -47,7 +47,7 @@ func TestParseJSONRoundTrip(t *testing.T) {
 		{name: "uppercase exponent", in: "1E5", out: `1e5`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, err := cnfjson.ParseJSON([]byte(tc.in))
+			root, err := cnfjson.ParseJSON([]byte(tc.in), nil)
 			if err != nil {
 				t.Fatalf("parse error: %s", err)
 			}
@@ -62,7 +62,7 @@ func TestParseJSONRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("cnf does not re-parse %q: %s", cnfOut, err)
 			}
-			jsonOut, err := cnfjson.RenderJSON(reparsed)
+			jsonOut, err := cnfjson.RenderJSON(reparsed, nil)
 			if err != nil {
 				t.Fatalf("json render error: %s", err)
 			}
@@ -92,7 +92,7 @@ func TestParseJSONErrors(t *testing.T) {
 		{name: "two documents", in: `1 2`, want: "trailing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := cnfjson.ParseJSON([]byte(tc.in))
+			_, err := cnfjson.ParseJSON([]byte(tc.in), nil)
 			if err == nil {
 				t.Fatalf("parsed without error, want %q", tc.want)
 			}
@@ -103,7 +103,7 @@ func TestParseJSONErrors(t *testing.T) {
 	}
 	// The malformed-input class: whatever the decoder says, it
 	// is an error, not a panic.
-	if _, err := cnfjson.ParseJSON([]byte(`{"a":`)); err == nil {
+	if _, err := cnfjson.ParseJSON([]byte(`{"a":`), nil); err == nil {
 		t.Error("parsed truncated input without error")
 	}
 }
@@ -128,7 +128,7 @@ func TestFromJSON(t *testing.T) {
 		{name: "nested arrays", in: `{"l":[[1],[2,3]]}`, want: "l: [[1], [2, 3]]\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := cnfjson.FromJSON([]byte(tc.in))
+			out, err := cnfjson.FromJSON([]byte(tc.in), nil)
 			if err != nil {
 				t.Fatalf("error: %s", err)
 			}

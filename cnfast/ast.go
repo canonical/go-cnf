@@ -22,15 +22,7 @@ import (
 	"strconv"
 )
 
-// Each AST type names its fields for what they hold: the
-// string's decoded text, the number's written spelling, the
-// containers' items. The JSON tags are shorter, to keep the
-// JSON form compact and easy to read on inspection.
-
-// A Value is any node that can sit in a value position: the value
-// of a key, or an element of a list. The unexported marker method
-// keeps construction inside the package, so an AST can never hold
-// a stray type, and it documents the value grammar in one place.
+// A Value is any node that can sit in a value position: Str, Num, Scalar, Map, List.
 type Value interface {
 	value() // marker
 }
@@ -41,37 +33,23 @@ type Pos struct {
 	C int `json:"c"`
 }
 
-// String spells the position as "L:C": the 1-based line
-// and column, for an error message.
+// String returns the position as "L:C": the 1-based line and column.
 func (p Pos) String() string {
 	return strconv.Itoa(p.L) + ":" + strconv.Itoa(p.C)
 }
 
-// A Str is a string: the decoded text, with the quote style of
-// its spelling. Unquoted is keys-only: a bare word is never a
-// value. Block records the two states a Str can take: unset
-// for the single-line spellings - quoted and the one-line
-// fence - set for the fence block spelling, the fence on its
-// own lines, indented under its key. A quoted string can
-// never be spelled as a block, so a set Block is only read as
-// a fence block when Quote holds one of the fenced families.
-//
-// Text holds the encoded lines of the recorded spelling, one
-// per source line, with the indentation stripped. When Text
-// is set, the render writes it as is, after checking that it
-// still decodes to Data; when it is not, the render encodes
-// Data from scratch. If Text decodes to something else, the
-// two fields disagree - someone changed Data without calling
-// Set - and the render fails instead of guessing which one
-// is current.
+// A Str represents a string in the document. Unquoted (bare)
+// strings can only be used in key positions, but they are
+// accepted by the renderer and will escalate to the best
+// guess of a reasonable representation.
 type Str struct {
 	Data  string    `json:"str"`
-	Text  []string  `json:"-"` // the encoded lines, unset when spelled fresh
+	Text  []string  `json:"-"`
 	Pos   Pos       `json:"pos"`
 	Quote QuoteKind `json:"quote,omitzero"`
 	Block bool      `json:"block,omitzero"`
 
-	offset int `json:"-"` // within the line's text, for Pos
+	offset int
 }
 
 func (*Str) value() {}
@@ -111,42 +89,31 @@ type Scalar struct {
 
 func (*Scalar) value() {}
 
-// A Cmt is a run of comment lines, one element per line,
-// copied verbatim from the source, indent included. A blank
-// line is the empty string. The elements are slices of the
-// parsed text, so building a run allocates only the slice.
-// Pos points at the run's first line: the blank divider line
-// before a pre or post run, or the first blank after the
-// value for an in comment.
+// A Cmt is a sequence of comment lines, one element per line,
+// copied verbatim from the source. A blank line becomes an
+// empty string. Pos points at the first line.
 type Cmt struct {
 	Text []string `json:"cmt"`
 	Pos  Pos      `json:"pos"`
 }
 
-// An Item is one element of a document: a map pair (one
-// "key: value" line), a list element, or the root value. The
-// key is absent when the element carries no path. The
-// comment runs around it sit in source order: PreCmt holds
-// the comments before the line, HeadCmt the comments inside
-// the block value before its first item, InCmt the comments
-// right after the value, FootCmt the comments inside the
-// block value after its last item, and PostCmt the comments
-// after the line, up to the first blank. The blank divider
-// between two runs is not stored anywhere; the render
-// writes it back where the source had it.
+// An Item is a map key-value pair, a list element, or the
+// root value. The key is always present for map items,
+// but it is also be present in dashed lists that have an
+// map line like `- key: "value"`.
 //
-// Indent is the indent added for the content under this
-// item. A block value held by the item opens at the item's
-// line prefix plus this indent, an empty string adding
-// nothing. The empty string means zero distance, it is not
-// a status flag. Two cases hold it by design. A fence
-// element's flat content: the element has no indent of its
-// own, its base is the fence's, so the distance is zero.
-// An inline value: it can also hold an indent handed down
-// from the tree, so a later unfold opens it at the tree's
-// own step. The grammar, not this field, forces a non-zero
-// indent where it does: a block under a pair must open
-// strictly deeper than the pair.
+// The comments sit in source order:
+//
+//   - PreCmt holds comments right before the item
+//   - HeadCmt holds comments inside the item's block at the top
+//   - InCmt holds inline comments following the item
+//   - FootCmt holds comments inside the item's blcok at the bottom
+//   - PostCmt holds comments right after the item
+//
+// For HeadCmt and FootCmt to be recorded as such, the comments
+// must be spaced from block values by a blank line.
+//
+// Indent is the indent added for the content under this item.
 type Item struct {
 	Key     []*Str `json:"key,omitempty"`
 	PreCmt  Cmt    `json:"precmt,omitzero"`
@@ -158,10 +125,11 @@ type Item struct {
 	Indent  string `json:"indent,omitzero"`
 }
 
-// A List is a list of items. Block defines if the list is
+// A List holds a list of items. Block defines if the list is
 // inline or not, and Dashed defines if the Block form is
 // expressed as a compact list of dashed items, or otherwise
-// the fence form that allows block children.
+// the fence form that allows block children. A list Item will
+// have its key set for dashed key-value pairs (`- key: "value"`).
 type List struct {
 	Items  []*Item `json:"list"`
 	Dashed bool    `json:"dashed,omitzero"`
@@ -171,11 +139,8 @@ type List struct {
 
 func (*List) value() {}
 
-// A Map is a block of pairs. Block defines if the map is
-// inline or indented under its parent. A map has no fenced
-// spelling, so the block form is the only other one. The
-// comment runs around its pairs live on the enclosing
-// item: its HeadCmt and FootCmt.
+// A Map holds an ordered sequence of key-value pairs.
+// Block defines if the map is inline or multi-line.
 type Map struct {
 	Items []*Item `json:"map"`
 	Block bool    `json:"block,omitzero"`

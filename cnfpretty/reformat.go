@@ -23,114 +23,73 @@ import (
 	"github.com/canonical/go-cnf/cnfast"
 )
 
-// Options are the reformatting settings: the knobs that
-// rewrite an AST's layout at render time. The settings never
-// mutate the AST's recorded text - they override the layout
-// for one render. Each field is a threshold: zero means unset,
-// and an unset field never triggers, so the AST's recorded
-// layout is preserved. The default render changes nothing.
+// Options holds the knobs that control reformatting.
 //
-// The settings are unstable: they evolve with the formatter,
-// and their behavior may change across updates.
+// The settings evolve with the reformatter, and their exact
+// behavior may be fine-tuned across updates.
 type Options struct {
 
-	// FoldPathUptoDepth folds a path into its key: nesting
-	// levels join the key's dotted segments while the key
-	// would hold up to and including this many segments - a
-	// segment already dotted on a line counts. The value at
-	// the end of the path stays on the folded line, verbatim;
-	// a path too deep folds to the budget and the remainder
-	// nests. The fold never splits a dotted segment: that is
-	// the unfold's operation. Zero means unset.
+	// FoldPathUptoDepth folds single-item map keys onto its
+	// parent map key, forming a dotted path. Keys are folded
+	// up until reaching the given nesting depth.
 	FoldPathUptoDepth int
 
-	// FoldPathFromDepth folds a path into its key past a
-	// depth threshold: the nesting levels below an item join
-	// its key - the enclosing key prepended - while the line
-	// extends past this depth, the limit exclusive: a line
-	// ending at or before the threshold is kept as is, the
-	// fold never extending it. The value at the end of the
-	// path stays on the folded line, verbatim; an inline map
-	// is a value, the fold never opens it. Zero means unset.
+	// FoldPathFromDepth folds single-item map keys onto its
+	// parent map key, forming a dotted path. Keys are folded
+	// up starting at the given nesting depth.
 	FoldPathFromDepth int
 
-	// UnfoldPathFromDepth unfolds a key line past a depth
-	// threshold: the dotted segments past the threshold split
-	// off the key, one nesting level per segment, the limit
-	// inclusive - the segments before the threshold stay
-	// on the key, the start kept as is. The value at the end
-	// of the path stays on the unfolded key's line, verbatim;
-	// an inline map is a value, the unfold never opens it.
-	// Zero means unset.
-	UnfoldPathFromDepth int
-
-	// UnfoldPathUptoDepth unfolds a key line up to a depth
-	// limit: the dotted segments at or before the limit split
-	// off the key, one nesting level per segment, the limit
-	// inclusive - the segments past it stay dotted on the
-	// innermost key, the deep tail kept as is. The value at
-	// the end of the path stays on the innermost unfolded
-	// key's line, verbatim; an inline map is a value, the
-	// unfold never opens it. Zero means unset.
+	// UnfoldPathUptoDepth unfolds keys out of dotted paths,
+	// forming an expanded single item map. Keys are unfolded
+	// until reaching the given nesting depth.
 	UnfoldPathUptoDepth int
 
-	// SoftWrapStringFromWidth wraps a string whose line
-	// exceeds this width at the next space past the limit:
-	// the break lands on whitespace, the word staying whole.
-	// A line with no space before the limit is kept - the
-	// hard knob is the backstop. A wrapped string is rewritten
-	// as a fence, the lines its recorded Text. Zero means
-	// unset.
+	// UnfoldPathFromDepth unfolds keys out of dotted paths,
+	// forming an expanded single item map. Keys are unfolded
+	// starting at the given nesting depth.
+	UnfoldPathFromDepth int
+
+	// SoftWrapStringFromWidth wraps a string line that exceeds
+	// this width at the next space past the limit, if any.
+	// If a hard wrap is set, the space selected is the one
+	// closest to the hard limit, if any.
+	// The width is of the string line itself, without indents.
 	SoftWrapStringFromWidth int
 
-	// HardWrapStringFromWidth wraps a string whose line
-	// exceeds this width wherever the limit falls, mid-word
-	// if it must: the aggressive backstop for words longer
-	// than the soft margin. A wrapped string is rewritten as
-	// a fence, the lines its recorded Text. Zero means unset.
+	// HardWrapStringFromWidth wraps a string line that exceeds
+	// this width at the exact limit, wherever it falls.
+	// The width is of the string line itself, without indents.
 	HardWrapStringFromWidth int
-
-	// UnfoldListFromItems unfolds a list to its block form -
-	// one element per line behind a dash - once it holds more
-	// than this many items. Zero means unset.
-	UnfoldListFromItems int
-
-	// UnfoldMapFromItems unfolds a map to its block form -
-	// one pair per line - once it holds more than this many
-	// items. Zero means unset.
-	UnfoldMapFromItems int
 
 	// FoldListUptoItems folds a list into its inline form -
 	// one line, comma-separated - while it holds up to and
-	// including this many items. Zero means unset.
+	// including this many items.
 	FoldListUptoItems int
+
+	// UnfoldListFromItems unfolds a list to its block form -
+	// one element per line behind a dash - once it holds more
+	// than this many items.
+	UnfoldListFromItems int
 
 	// FoldMapUptoItems folds a map into its inline form -
 	// one line, comma-separated pairs - while it holds up to
-	// and including this many items. Zero means unset.
+	// and including this many items.
 	FoldMapUptoItems int
 
-	// Reindent rewrites the indent every block level opens
-	// at to this string, the whole document one step: the
-	// recorded and the freshly created indents alike, a
-	// whole-document restyle of placement only. The empty
-	// string means unset: each level keeps its own indent.
+	// UnfoldMapFromItems unfolds a map to its block form -
+	// one pair per line - once it holds more than this many
+	// items.
+	UnfoldMapFromItems int
+
+	// Reindent changes all indents to the provided string.
 	Reindent string
 
-	// IgnoreComments lets a layout rewrite go through even
-	// when it would drop comment runs: the layout change
-	// is made anyway, and the runs are lost. The knob unset,
-	// a rewrite that cannot carry its comments along leaves
-	// the item in its recorded form instead. The protection
-	// lands one rewrite at a time; until a rewrite carries
-	// its guard, it drops comments whether the knob is set
-	// or not.
+	// IgnoreComments allows reformatting to go on even if
+	// comments would be lost. The default behavior is to
+	// stop reformatting to prevent loss of comments.
 	IgnoreComments bool
 }
 
-// TODO: Add Refactor.Indent, and learn to detect the best
-// indent out of an inconsistent AST by counting occurrences.
-//
 // defaultIndent is the indent the reformat records on a
 // container that has none: a map whose children were all
 // inline, or a fresh map the reformat builds when it opens a
@@ -144,7 +103,7 @@ const defaultIndent = "    "
 // It is also unstable, in the sense that it evolves with the
 // formatter and its behavior may change across updates as the
 // subjective idea of what looks good or not is developed.
-var Pretty = Options{}
+var _Pretty = Options{}
 
 // unfoldList reports whether the settings rewrite one inline
 // list as a block: the list holds this many items or more -
@@ -1032,23 +991,8 @@ func setInline(item *cnfast.Item) {
 	item.Indent = ""
 }
 
-// Apply runs the reformat over one whole item tree, under
-// the settings, rewriting the tree in place: the tree is the
-// caller's to give - a clone, or a fresh build - and the
-// reformat's to mutate freely. The reformat is a series of
-// phases, each one descent over the tree, each mutating in
-// place: the layouts unfold first - the inline values the
-// settings ask for opening into their block forms, so the
-// later phases see the whole tree as block - then the
-// paths split, the key lines within the knobs' limits
-// opening one nesting level per segment - then the paths
-// fold, the levels within the fold's depth range joining
-// their keys - and the layouts fold last, bottom-up, the
-// children decided before their ancestors. A phase that
-// refuses - a merge it cannot resolve - fails the apply. A
-// caller rendering the tree as JSON - or any format without
-// dotted keys - applies the unfold profile first, so the
-// paths arrive split and the items merged.
+// Apply reformats the item hierarchy according to the
+// provided options.
 func Apply(item *cnfast.Item, opts *Options) error {
 	if opts == nil {
 		opts = &Options{}

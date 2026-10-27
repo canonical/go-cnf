@@ -51,19 +51,12 @@ const (
 	jmap
 )
 
-// ParseJSON parses one JSON value into the AST root it
-// represents: a fresh, unpositioned tree the render writes as
-// cnf. The correspondence follows the two formats' shared data
-// model - an object a block map, an array an inline list, a
-// string a Str, a number a Num, true/false/null a Scalar -
-// with every spelling left to the render's family ladder and
-// every layout decided by the node's form alone: an object
-// under a pair opens a block one level deeper, an empty
-// object, and every object inside an array, stays inline -
-// the inline forms are the only ones an array holds. Number
-// forms pass through verbatim but one: the cnf grammar reads
-// e alone, so an uppercase exponent letter folds to lowercase.
-func ParseJSON(data []byte) (*cnfast.Item, error) {
+// Options for parsing and rendering.None exist yet,
+// here for future compatibility.
+type Options struct{}
+
+// ParseJSON translates a json value to a cnf AST hierarchy.
+func ParseJSON(data []byte, opts *Options) (*cnfast.Item, error) {
 	root, err := walk(data)
 	if err != nil {
 		return nil, err
@@ -71,10 +64,9 @@ func ParseJSON(data []byte) (*cnfast.Item, error) {
 	return &cnfast.Item{Value: shape(root, false)}, nil
 }
 
-// FromJSON converts JSON text to cnf: the value parses into
-// the AST, and the AST renders.
-func FromJSON(data []byte) ([]byte, error) {
-	root, err := ParseJSON(data)
+// FromJSON translates json text to cnf text.
+func FromJSON(data []byte, opts *Options) ([]byte, error) {
+	root, err := ParseJSON(data, opts)
 	if err != nil {
 		return nil, err
 	}
