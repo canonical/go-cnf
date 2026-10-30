@@ -200,7 +200,7 @@ func setPath(m map[string]any, path []string, val any) error {
 		}
 		subMap, ok := existing.(map[string]any)
 		if !ok {
-			return fmt.Errorf("cannot expand key %q into a map", seg)
+			return fmt.Errorf("cannot redefine previous key `%s`", seg)
 		}
 		m = subMap
 	}

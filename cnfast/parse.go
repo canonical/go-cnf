@@ -143,7 +143,14 @@ func Parse(data []byte, opts *ParseOptions) (*Item, error) {
 		return nil, invalidUTF8Err(data)
 	}
 	p := &parser{lines: splitLines(string(data))}
-	return p.parseTop()
+	item, err := p.parseTop()
+	if err != nil {
+		return nil, err
+	}
+	if err := checkConflicts(item); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 // invalidUTF8Err locates the first invalid byte in data and

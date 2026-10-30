@@ -114,11 +114,11 @@ var unmarshalErrTests = []struct {
 }{{
 	name: "scalar against map",
 	in:   "a: 1\na.b: 2\n",
-	want: "2:1: cannot expand key \"a\" into a map",
+	want: "2:1: cannot redefine previous key `a`",
 }, {
 	name: "map against scalar",
 	in:   "a.b: 1\na: 2\n",
-	want: "2:1: cannot merge with previous `a`: not a map",
+	want: "2:1: cannot redefine previous key `a`",
 }, {
 	name: "junk suffix on number",
 	in:   "a: 1x\n",

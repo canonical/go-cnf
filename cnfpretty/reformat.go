@@ -462,13 +462,27 @@ func insert(m *cnfast.Map, item *cnfast.Item) error {
 			continue
 		}
 		heldMap, ok := held.Value.(*cnfast.Map)
-		if !ok || !heldMap.Block {
+		if !ok {
 			return pathErrorf("%scannot merge with previous %s: not a map", itemPos(item), item.Key)
+		}
+		// A key a path merges into is no longer honestly inline -
+		// an outside line writes into it, and how many more will
+		// route the same way is unbounded - so it converts to
+		// block form on the spot, erring on the side of the
+		// block. The conversion is lazy, here in the merge: an
+		// empty block map cannot exist in written form - there
+		// is nothing to indent - so only the items arriving
+		// with this insert can ever fill the levels it opens.
+		if !heldMap.Block {
+			heldMap.Block = true
+			if held.Indent == "" {
+				held.Indent = defaultIndent
+			}
 		}
 		rest := item.Key[len(held.Key):]
 		if len(rest) == 0 {
 			itemMap, ok := item.Value.(*cnfast.Map)
-			if !ok || !itemMap.Block {
+			if !ok || (!itemMap.Block && len(itemMap.Items) > 0) {
 				return pathErrorf("%scannot merge with previous %s: not a map", itemPos(item), item.Key)
 			}
 			for _, it := range itemMap.Items {
