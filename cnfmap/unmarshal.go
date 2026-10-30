@@ -114,16 +114,21 @@ func keyPath(item *cnfast.Item) []string {
 // degrading to the nearest double rather than failing - the
 // spec's floor is double precision, and a small decoder meets
 // it without big-number machinery.
-func parseNumber(word string) (float64, error) {
+func parseNumber(s string) (float64, error) {
+	sign := float64(1)
+	text := s
+	if len(s) > 0 && s[0] == '-' {
+		sign, s = -1, s[1:]
+	}
 	base := 10
-	digits := word
+	digits := s
 	switch {
-	case strings.HasPrefix(word, "0x"):
-		base, digits = 16, word[2:]
-	case strings.HasPrefix(word, "0o"):
-		base, digits = 8, word[2:]
-	case strings.HasPrefix(word, "0b"):
-		base, digits = 2, word[2:]
+	case strings.HasPrefix(s, "0x"):
+		base, digits = 16, s[2:]
+	case strings.HasPrefix(s, "0o"):
+		base, digits = 8, s[2:]
+	case strings.HasPrefix(s, "0b"):
+		base, digits = 2, s[2:]
 	}
 	if base != 10 {
 		// Integers within int64 keep their exact value; wider
@@ -131,29 +136,29 @@ func parseNumber(word string) (float64, error) {
 		// failing - the spec's floor is double precision, and
 		// a tiny parser meets it without big-number machinery.
 		if digits == "" {
-			return 0, fmt.Errorf("cannot parse number %q", word)
+			return 0, fmt.Errorf("cannot parse number %q", text)
 		}
 		if n, err := strconv.ParseInt(digits, base, 64); err == nil {
-			return float64(n), nil
+			return sign * float64(n), nil
 		}
 		if n, err := strconv.ParseUint(digits, base, 64); err == nil {
-			return float64(n), nil
+			return sign * float64(n), nil
 		}
 		var f float64
 		for _, c := range digits {
 			d := digitVal(c)
 			if d < 0 || d >= base {
-				return 0, fmt.Errorf("cannot parse number %q", word)
+				return 0, fmt.Errorf("cannot parse number %q", text)
 			}
 			f = f*float64(base) + float64(d)
 		}
-		return f, nil
+		return sign * f, nil
 	}
-	n, err := strconv.ParseFloat(word, 64)
+	n, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		return 0, fmt.Errorf("cannot parse number %q", word)
+		return 0, fmt.Errorf("cannot decode number: %s is out of range for float64", text)
 	}
-	return n, nil
+	return sign * n, nil
 }
 
 // digitVal reads one digit of any base up to 16, or -1 when the

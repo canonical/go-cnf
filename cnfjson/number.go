@@ -29,6 +29,10 @@ import (
 // division of the digit string.
 func writeNumber(b *strings.Builder, n *cnfast.Num) error {
 	word := n.Text
+	sign := ""
+	if len(word) > 0 && word[0] == '-' {
+		sign, word = "-", word[1:]
+	}
 	base := 10
 	digits := word
 	switch {
@@ -42,13 +46,57 @@ func writeNumber(b *strings.Builder, n *cnfast.Num) error {
 	if base != 10 {
 		out, err := baseToDecimal(digits, base)
 		if err != nil {
-			return fmt.Errorf("cannot parse number %q", word)
+			return fmt.Errorf("cannot parse number %q", n.Text)
 		}
+		b.WriteString(sign)
 		b.WriteString(out)
 		return nil
 	}
-	b.WriteString(word)
+	if !isDecimalShape(word) {
+		return fmt.Errorf("cannot parse number %q", n.Text)
+	}
+	b.WriteString(n.Text)
 	return nil
+}
+
+// isDecimalShape reports whether body matches the grammar's
+// decimal spellings, mirroring cnfast's own check: numint
+// ["." 1*DIGIT] ["e" ["+" / "-"] 1*DIGIT].
+func isDecimalShape(body string) bool {
+	mantissa := body
+	if i := strings.IndexByte(body, 'e'); i >= 0 {
+		mantissa = body[:i]
+		exp := body[i+1:]
+		if exp == "" {
+			return false
+		}
+		if exp[0] == '+' || exp[0] == '-' {
+			exp = exp[1:]
+		}
+		if !allDigits(exp) {
+			return false
+		}
+	}
+	intPart := mantissa
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		intPart = mantissa[:i]
+		if !allDigits(mantissa[i+1:]) {
+			return false
+		}
+	}
+	return intPart != "" && allDigits(intPart)
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // baseToDecimal converts a digit string in the given base to
