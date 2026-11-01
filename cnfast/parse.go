@@ -548,7 +548,7 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 		// The separator must sit where the scan stopped: the
 		// remainder's first column, the honest spot for what
 		// refuses to be one.
-		return nil, errAt(Pos{L: ln.num, C: base + len(ln.text) - len(after)}, "cannot find key-value separator ':'")
+		return nil, errAt(Pos{L: ln.num, C: base + len(ln.text) - len(after)}, "cannot find key-value separator `:`")
 	}
 	for i := range path {
 		path[i].Pos.L = ln.num
@@ -1275,7 +1275,7 @@ func (p *parser) scanInlineList(ln line, text string, pos Pos) (Value, string, e
 		if rest == "" {
 			// The list that never closes is named where it
 			// opened: its own start, so nested lists tell apart.
-			return nil, "", errAt(pos, "cannot find closing ']'")
+			return nil, "", errAt(pos, "cannot find closing `]`")
 		}
 		if rest[0] == ']' {
 			return l, rest[1:], nil
@@ -1311,7 +1311,7 @@ func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, er
 			// The separator must sit where the scan stopped: the
 			// remainder's first column, the honest spot for what
 			// refuses to be one.
-			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + off + len(text) - len(after)}, "cannot find key-value separator ':'")
+			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + off + len(text) - len(after)}, "cannot find key-value separator `:`")
 		}
 		for i := range path {
 			path[i].Pos.L = ln.num
@@ -1326,7 +1326,7 @@ func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, er
 		if rest == "" {
 			// The map that never closes is named where it
 			// opened: its own start, so nested maps tell apart.
-			return nil, "", errAt(pos, "cannot find closing '}'")
+			return nil, "", errAt(pos, "cannot find closing `}`")
 		}
 		if rest[0] == '}' {
 			return m, rest[1:], nil

@@ -13,18 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package cnfembed is a minimal, single-file, streaming
-// translator from cnf text to json text. The decoder holds no
-// intermediate tree: each value is scanned straight into its
-// json fragment, and each block map is an open frame - an
-// ordered set of key-value entries - that merges duplicate
-// key paths as they arrive and folds into its json object the
-// moment its lines end. Only the frames of the maps currently
-// open on the indentation stack ever exist.
-//
-// The grammar, the error messages, and the error positions
-// are those of the cnfast parser, kept verbatim - the
-// conformance corpus pins them.
+// Package cnfembed is a minimal, single-file translator from
+// cnf text to json text. The whole document preprocesses into
+// one tree of map scopes - a keyNode per key, paths dissolved
+// into single segments, lists nested with fresh scopes inside
+// - then marshals out. Scalars are json-encoded at scan time;
+// error messages and positions are cnfast's, kept verbatim.
 package cnfembed
 
 import (
@@ -39,15 +33,251 @@ type Options struct{}
 
 // ToJSON translates cnf text to json text.
 func ToJSON(data []byte, opts *Options) ([]byte, error) {
-	if !utf8.Valid(data) {
-		return nil, invalidUTF8Err(data)
+	root, err := parse(data)
+	if err != nil {
+		return nil, err
 	}
-	p := &parser{lines: splitLines(string(data))}
-	return p.parseTop()
+	return []byte(writeNodeString(root)), nil
 }
 
 //
-// The document lines and their source positions
+// The tree: the whole document in map scopes
+//
+
+// A keyNode is one key of one map scope and the value under
+// it: a map, a list, or a scalar's pre-encoded json. A bare
+// list element carries no key; a map's sub is never nil.
+type keyNode struct {
+	key      string     // the segment's decoded text; "" for a bare list element
+	quote    quoteKind  // the segment's quoting style, to spell it in errors
+	pos      pos        // where the segment was written
+	sub      []*keyNode // the map or list under this key
+	list     bool       // sub holds a list's elements, not a map's pairs
+	json     string     // the pre-encoded scalar value; "" = none
+	expanded bool       // a map was written here already, once only
+	offset   int        // the segment's offset within its scanned path
+}
+
+type quoteKind int
+
+const (
+	unquoted     quoteKind = iota // bare word
+	doubleQuoted                  // "..."
+	singleQuoted                  // '...'
+)
+
+func (n *keyNode) find(key string) *keyNode {
+	for _, e := range n.sub {
+		if e.key == key {
+			return e
+		}
+	}
+	return nil
+}
+
+// walk descends the path's inner segments, creating
+// pass-through maps. Only a definition - a scalar or a
+// list - blocks a path; a map is traversed, however spelled.
+func (scope *keyNode) walk(path []*keyNode) (*keyNode, error) {
+	for _, seg := range path[:len(path)-1] {
+		node := scope.find(seg.key)
+		if node == nil {
+			node = &keyNode{key: seg.key, quote: seg.quote, pos: seg.pos, sub: []*keyNode{}}
+			scope.sub = append(scope.sub, node)
+		} else if node.json != "" || node.list {
+			return nil, errAt(seg.pos, fmt.Sprintf("cannot redefine previous key `%s`", node.key))
+		}
+		scope = node
+	}
+	return scope, nil
+}
+
+// define places a non-map value: the tip must carry nothing
+// yet. A redefinition reports the whole path, anchored at
+// its first segment.
+func (scope *keyNode) define(path []*keyNode, val *keyNode) error {
+	parent, err := scope.walk(path)
+	if err != nil {
+		return err
+	}
+	tip := path[len(path)-1]
+	if parent.find(tip.key) != nil {
+		return redefinePath(path)
+	}
+	parent.sub = append(parent.sub, &keyNode{
+		key: tip.key, quote: tip.quote, pos: tip.pos,
+		json: val.json, list: val.list, sub: val.sub,
+	})
+	return nil
+}
+
+// expand opens the tip's map for its items to be read
+// straight into, once only: a map already written there is
+// a second expansion.
+func (scope *keyNode) expand(path []*keyNode) (*keyNode, error) {
+	parent, err := scope.walk(path)
+	if err != nil {
+		return nil, err
+	}
+	tip := path[len(path)-1]
+	node := parent.find(tip.key)
+	if node == nil {
+		node = &keyNode{key: tip.key, quote: tip.quote, pos: tip.pos, sub: []*keyNode{}}
+		parent.sub = append(parent.sub, node)
+	} else if node.json != "" || node.list {
+		return nil, redefinePath(path)
+	} else if node.expanded {
+		return nil, expandPathErr(path)
+	}
+	node.expanded = true
+	return node, nil
+}
+
+// redefinePath reports a second definition, the path spelled
+// in full and anchored at its first segment.
+func redefinePath(path []*keyNode) error {
+	return errAt(path[0].pos, "cannot redefine previous key "+keyPath(path))
+}
+
+// expandPathErr reports a map key's second expansion.
+func expandPathErr(path []*keyNode) error {
+	return errAt(path[0].pos, "cannot expand map key "+keyPath(path)+" more than once")
+}
+
+// wrapPath wraps a keyed element's path around its value:
+// one single-pair level per segment, the tip holding it.
+func wrapPath(path []*keyNode, val *keyNode) *keyNode {
+	n := &keyNode{
+		key: path[len(path)-1].key, quote: path[len(path)-1].quote, pos: path[len(path)-1].pos,
+		json: val.json, list: val.list, sub: val.sub,
+	}
+	for i := len(path) - 2; i >= 0; i-- {
+		n = &keyNode{
+			key: path[i].key, quote: path[i].quote, pos: path[i].pos,
+			sub: []*keyNode{n},
+		}
+	}
+	return n
+}
+
+// writeNodeString marshals one value node as json text.
+func writeNodeString(n *keyNode) string {
+	var b strings.Builder
+	writeNode(&b, n)
+	return b.String()
+}
+
+// writeNode writes the value face: a list's elements, a
+// map's pairs, or the scalar json. Keys are the parent's
+// to write - a map writes them, a list does not.
+func writeNode(b *strings.Builder, n *keyNode) {
+	switch {
+	case n.list:
+		b.WriteString("[")
+		for i, e := range n.sub {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			if e.key != "" {
+				// The element's key face: nothing below the list writes
+				// keys, so the head's own key wraps its value here.
+				b.WriteString("{")
+				writeJSONString(b, e.key)
+				b.WriteString(":")
+				writeNode(b, e)
+				b.WriteString("}")
+				continue
+			}
+			writeNode(b, e)
+		}
+		b.WriteString("]")
+	case n.sub != nil:
+		b.WriteString("{")
+		for i, e := range n.sub {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			writeJSONString(b, e.key)
+			b.WriteString(":")
+			writeNode(b, e)
+		}
+		b.WriteString("}")
+	default:
+		b.WriteString(n.json)
+	}
+}
+
+//
+// The source positions
+//
+
+// A pos is a source position for errors: 1-based line and column.
+type pos struct {
+	L int
+	C int
+}
+
+// String returns the position as "L:C".
+func (p pos) String() string {
+	return fmt.Sprintf("%d:%d", p.L, p.C)
+}
+
+func errAt(p pos, msg string) error {
+	return fmt.Errorf("%d:%d: %s", p.L, p.C, msg)
+}
+
+// A scanError is an error a byte scanner raises inside the
+// text it was scanning: the offset names where the offender
+// sits within that text.
+type scanError struct {
+	offset int
+	msg    string
+}
+
+func (e scanError) Error() string { return e.msg }
+
+// errAtScan wraps a scan error at the source position where
+// the scanned text begins: pos advanced over the scanned text
+// the error's offset names.
+func errAtScan(p pos, text string, scanErr error) error {
+	serr, ok := scanErr.(scanError)
+	if !ok {
+		return errAt(p, scanErr.Error())
+	}
+	offset := serr.offset
+	if offset > len(text) {
+		offset = len(text)
+	}
+	delta := text[:offset]
+	l := p.L + strings.Count(delta, "\n")
+	last := strings.LastIndexByte(delta, '\n')
+	c := p.C
+	if last >= 0 {
+		c = utf8.RuneCountInString(delta[last+1:]) + 1
+	} else {
+		c += utf8.RuneCountInString(delta)
+	}
+	return errAt(pos{L: l, C: c}, serr.msg)
+}
+
+// keyPath spells one key path for an error message: dot-
+// joined segments inside backquotes, each in its recorded
+// quote style. `a` and `a."b"` are how the forms look.
+func keyPath(path []*keyNode) string {
+	var b strings.Builder
+	b.WriteString("`")
+	for i, k := range path {
+		if i > 0 {
+			b.WriteString(".")
+		}
+		b.WriteString(quote(k.key, k.quote))
+	}
+	b.WriteString("`")
+	return b.String()
+}
+
+//
+// The document lines
 //
 
 // A line is one physical line of the document, split into
@@ -80,46 +310,6 @@ func splitLines(data string) []line {
 	return lines
 }
 
-// A Pos is a source position for errors: 1-based line and
-// column.
-type pos struct {
-	L int
-	C int
-}
-
-// String returns the position as "L:C".
-func (p pos) String() string {
-	return fmt.Sprintf("%d:%d", p.L, p.C)
-}
-
-func errAt(p pos, msg string) error {
-	return fmt.Errorf("%d:%d: %s", p.L, p.C, msg)
-}
-
-// errAtScan wraps a scan error at the source position where
-// the scanned text begins: pos advanced over the scanned text
-// the error's offset names.
-func errAtScan(p pos, text string, scanErr error) error {
-	serr, ok := scanErr.(scanError)
-	if !ok {
-		return errAt(p, scanErr.Error())
-	}
-	offset := serr.offset
-	if offset > len(text) {
-		offset = len(text)
-	}
-	delta := text[:offset]
-	l := p.L + strings.Count(delta, "\n")
-	last := strings.LastIndexByte(delta, '\n')
-	c := p.C
-	if last >= 0 {
-		c = utf8.RuneCountInString(delta[last+1:]) + 1
-	} else {
-		c += utf8.RuneCountInString(delta)
-	}
-	return errAt(pos{L: l, C: c}, serr.msg)
-}
-
 func indentPos(ln line) pos {
 	return pos{L: ln.num, C: len(ln.indent) + 1}
 }
@@ -135,6 +325,15 @@ func quoteShort(s string) string {
 		}
 	}
 	return fmt.Sprintf("%q", s)
+}
+
+// parse reads a cnf document into its root value node.
+func parse(data []byte) (*keyNode, error) {
+	if !utf8.Valid(data) {
+		return nil, invalidUTF8Err(data)
+	}
+	p := &parser{lines: splitLines(string(data))}
+	return p.parseTop()
 }
 
 // invalidUTF8Err locates the first invalid byte in data and
@@ -160,163 +359,18 @@ func invalidUTF8Err(data []byte) error {
 }
 
 //
-// The frame: one block map while its lines are read
-//
-
-// An entry is one key-value pair of a frame: the key path of
-// the line that wrote it (split to a single segment by
-// splitKey), and the value - a finished json fragment, or a
-// child frame a later line may still merge into.
-type entry struct {
-	key  []*str
-	frag string // the finished json fragment
-	sub  *frame // a map value, open for further merges
-}
-
-// A frame is one block map in the making: the pairs it holds
-// so far, in document order, each key a single segment. The
-// keyed insert routes duplicate key paths into the frame a
-// matching segment already holds, merging what merges and
-// refusing what does not. The frame serializes to its json
-// object once, at the end of its lines - after which no line
-// can reach it anymore.
-type frame struct {
-	entries []entry
-}
-
-// attach splits the key path of one parsed key line and
-// places its value into the frame: the split unwinds from
-// the tail - the tail segment becomes the innermost entry's
-// key, each segment below it wraps one nesting level - and
-// the first segment is inserted under the merge rules.
-func attach(m *frame, key []*str, val entry) error {
-	if len(key) > 1 {
-		val = entry{key: key[len(key)-1:], frag: val.frag, sub: val.sub}
-		for j := len(key) - 2; j >= 1; j-- {
-			val = entry{key: key[j : j+1], sub: &frame{entries: []entry{val}}}
-		}
-		val = entry{sub: &frame{entries: []entry{val}}}
-	}
-	return insert(m, key[:1], val)
-}
-
-// insert places one entry into a frame by its key: an
-// existing key that prefixes the incoming key routes the
-// incoming below it through the existing entry's frame, an
-// exact match merges the incoming frame's pairs into the
-// existing one, and a key no existing one prefixes appends.
-// Both sides of a merge must hold frames; anything else is
-// an error, since the json could no longer spell the
-// conflict. Keys compare on their decoded values: a.b and
-// "a".b are one path.
-func insert(m *frame, key []*str, val entry) error {
-	for _, held := range m.entries {
-		if !prefixes(held.key, key) {
-			continue
-		}
-		if held.sub == nil {
-			return fmt.Errorf("%scannot merge with previous %s: not a map", itemPos(key), keyPath(key))
-		}
-		rest := key[len(held.key):]
-		if len(rest) == 0 {
-			if val.sub == nil {
-				return fmt.Errorf("%scannot merge with previous %s: not a map", itemPos(key), keyPath(key))
-			}
-			for _, pair := range val.sub.entries {
-				if err := insert(held.sub, pair.key, pair); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		return insert(held.sub, rest, val)
-	}
-	m.entries = append(m.entries, entry{key: key, frag: val.frag, sub: val.sub})
-	return nil
-}
-
-// prefixes reports whether one key path prefixes another,
-// compared on their decoded values: a prefixes a.b, and a
-// key prefixes itself - the empty remainder is the merge.
-func prefixes(a, b []*str) bool {
-	if len(a) > len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Data != b[i].Data {
-			return false
-		}
-	}
-	return true
-}
-
-// serialize writes the frame as its json object: the pairs
-// in document order, each key a single segment written as a
-// json string, each value its fragment or its frame in
-// turn.
-func (f *frame) serialize() string {
-	var b strings.Builder
-	b.WriteString("{")
-	for i, e := range f.entries {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		writeJSONString(&b, e.key[0].Data)
-		b.WriteString(":")
-		if e.sub != nil {
-			b.WriteString(e.sub.serialize())
-		} else {
-			b.WriteString(e.frag)
-		}
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
-// itemPos writes one key's source position for an error
-// message prefix - the line that wrote it, written "L:C: " -
-// or the empty string when the start was never located.
-func itemPos(key []*str) string {
-	if len(key) == 0 {
-		return ""
-	}
-	at := key[0].Pos
-	if at.L == 0 && at.C == 0 {
-		return ""
-	}
-	return at.String() + ": "
-}
-
-// keyPath spells one key path for an error message: dot-
-// joined segments inside backquotes, each in its recorded
-// quote style. `a` and `a."b"` are how the forms look.
-func keyPath(key []*str) string {
-	var b strings.Builder
-	b.WriteString("`")
-	for i, k := range key {
-		if i > 0 {
-			b.WriteString(".")
-		}
-		b.WriteString(Quote(k.Data, k.Quote))
-	}
-	b.WriteString("`")
-	return b.String()
-}
-
-//
-// The cnf parser, streaming into json fragments
+// The parser: lines read into map scopes
 //
 
 type parser struct {
 	lines   []line
 	pos     int
-	pending []line // comment and blank lines, not yet attributed
+	pending []line // comment and blank lines, not yet validated
 }
 
 // peekStruct returns the next structural line, collecting the
 // blank and comment lines it skips into the pending run. A
-// comment shallower than the block's prefix closes the
-// block: it is returned as the boundary line, unconsumed.
+// shallower comment closes the block: returned unconsumed.
 func (p *parser) peekStruct(prefix string) (line, bool) {
 	for p.pos < len(p.lines) {
 		ln := p.lines[p.pos]
@@ -339,9 +393,8 @@ func (p *parser) peekStruct(prefix string) (line, bool) {
 }
 
 // checkPending validates the pending run at the block's exact
-// prefix and drops it: a comment line at any other prefix is
-// an error. json cannot carry comments, so the run's content
-// itself is dropped - only the grammar's indent rule stands.
+// prefix and drops it: json cannot carry comments, so only
+// the indent rule stands.
 func (p *parser) checkPending(prefix string) error {
 	err := cmtIndentOK(p.pending, prefix)
 	p.pending = nil
@@ -357,67 +410,55 @@ func cmtIndentOK(run []line, parent string) error {
 	return nil
 }
 
-// parseTop reads the file's one value as a finished json
-// fragment. The empty file is the empty map, written as a
-// block: "{}".
-func (p *parser) parseTop() ([]byte, error) {
+// cmtNoFencePrefix rejects a pending run before a fence:
+// nothing may sit between the pair and the fence that
+// opens under it.
+func (p *parser) cmtNoFencePrefix() error {
+	for _, ln := range p.pending {
+		if ln.text != "" {
+			return errAt(indentPos(ln), "cannot comment between key and fence")
+		}
+		return errAt(indentPos(ln), "cannot blank between key and fence")
+	}
+	return nil
+}
+
+// parseTop reads the file's one value into the root node.
+func (p *parser) parseTop() (*keyNode, error) {
 	first, ok := p.peekStruct("")
 	if err := p.checkPending(""); err != nil {
 		return nil, err
 	}
 	if !ok {
-		return []byte("{}"), nil
+		// An empty file is an empty map.
+		return &keyNode{sub: []*keyNode{}}, nil
 	}
-	var frag string
 	if looksLikeItem(first.text) {
-		// A pair-shaped line opens a map, read to its end as
-		// one frame, then serialized.
-		m, err := p.parseMap("")
-		if err != nil {
+		// A pair-shaped line opens a map.
+		root := &keyNode{sub: []*keyNode{}}
+		if err := p.parseMap(root, ""); err != nil {
 			return nil, err
 		}
-		frag = m.serialize()
-	} else {
-		// The value opens on its own line - a fence, a list
-		// fence, an inline value - and sits at column zero.
-		if first.indent != "" {
-			return nil, errAt(indentPos(first), "cannot indent a top-level value")
-		}
-		var err error
-		switch {
-		case first.text == `"""` || first.text == `'''`:
-			frag, err = p.parseFence(first, first.text)
-		case first.text == "---":
-			frag, err = p.parseListFence(first)
-		case isListItem(first.text):
-			frag, err = p.parseBlockList(first.indent)
-		default:
-			// An inline value on the first line, which must end
-			// the file.
-			p.pos++ // consume the value's own line
-			frag, err = p.parseInline(first, first.text)
-		}
-		if err != nil {
-			return nil, err
-		}
+		return root, nil
+	}
+	// Any other value opens on its own line, at column zero.
+	if first.indent != "" {
+		return nil, errAt(indentPos(first), "cannot indent a top-level value")
+	}
+	root, err := p.parseBlockValue(first)
+	if err != nil {
+		return nil, err
 	}
 	if ln, more := p.peekStruct(""); more {
-		// The stray structural line at its own start: the
-		// content that comes after the top-level value. The
-		// message quotes a short prefix of it, so the error
-		// shows what the content was.
+		// Stray content after the top-level value.
 		return nil, errAt(indentPos(ln), "cannot parse content after top-level value: "+quoteShort(ln.text))
 	}
-	// The trailing comments the last peek collected ride in
-	// the pending run; json has nothing to say about them.
-	return []byte(frag), nil
+	return root, nil
 }
 
-// looksLikeItem reports whether text appears to be a
-// "path: value" line - a structural check only; the path may
-// still be invalid, but parseMap will surface the proper
-// error from scanKeyPath, naming the path, not the value
-// that follows it.
+// looksLikeItem is a cheap check for a "path: value" line:
+// the real scan names the path, not the value, on a bad
+// line.
 func looksLikeItem(text string) bool {
 	i := strings.IndexByte(text, ':')
 	if i <= 0 {
@@ -427,219 +468,199 @@ func looksLikeItem(text string) bool {
 	return c == '"' || c == '\'' || c == '.' || isBareRune(rune(c))
 }
 
-// parseMap reads the pairs of one block map at the exact
-// prefix into one frame, returned open for its parent to
-// merge into.
-func (p *parser) parseMap(parentIndent string) (*frame, error) {
-	m := &frame{}
+// isListItem reports whether text opens a block list item.
+func isListItem(text string) bool {
+	return text == "-" || strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "-\t")
+}
+
+// isStringFence reports whether text is a fence delimiter.
+func isStringFence(text string) bool {
+	return text == `"""` || text == `'''`
+}
+
+// parseBlockValue reads the block value opening at first,
+// a peeked line.
+func (p *parser) parseBlockValue(first line) (*keyNode, error) {
+	var v *keyNode
+	var err error
+	switch {
+	case isStringFence(first.text):
+		var s string
+		s, err = p.parseFence(first, first.text)
+		v = &keyNode{json: s}
+	case first.text == "---":
+		v, err = p.parseListFence(first)
+	case isListItem(first.text):
+		v, err = p.parseBlockList(first.indent)
+	case looksLikeItem(first.text):
+		m := &keyNode{sub: []*keyNode{}}
+		err = p.parseMap(m, first.indent)
+		v = m
+	default:
+		// An inline value on its only line.
+		p.pos++ // consume the value's own line
+		v, err = p.parseInline(first, first.text)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// parseMap reads one block map's pairs at the exact prefix
+// into the scope.
+func (p *parser) parseMap(scope *keyNode, parentIndent string) error {
 	for {
 		ln, ok := p.peekStruct(parentIndent)
 		if !ok {
-			if err := p.checkPending(parentIndent); err != nil {
-				return nil, err
-			}
-			return m, nil
+			return p.checkPending(parentIndent)
 		}
 		if ln.indent != parentIndent {
 			if len(ln.indent) > len(parentIndent) {
 				// The deeper line's own start: the pair that
 				// misses the block's prefix is named there.
-				return nil, errAt(indentPos(ln), "cannot mix indentation prefixes")
+				return errAt(indentPos(ln), "cannot mix indentation prefixes")
 			}
 			// A shallower line - structural or comment - closes
 			// the block; it stays in the stream for the parent.
-			if err := p.checkPending(parentIndent); err != nil {
-				return nil, err
-			}
-			return m, nil
+			return p.checkPending(parentIndent)
 		}
 		if err := p.checkPending(parentIndent); err != nil {
-			return nil, err
+			return err
 		}
 		p.pos++
-		key, val, err := p.parseItem(ln)
-		if err != nil {
-			return nil, err
-		}
-		if err := attach(m, key, val); err != nil {
-			return nil, err
+		if err := p.parseItem(ln, scope); err != nil {
+			return err
 		}
 	}
 }
 
-// parseItem splits one "path: value" line into its single
-// first key segment and its value entry. Positions are
-// 1-based: the line's content starts at column
-// len(indent)+1, so a token at offset i in text sits at
-// column len(indent)+1+i.
-func (p *parser) parseItem(ln line) ([]*str, entry, error) {
+// parseItem reads one "path: value" line into the scope.
+// A token at offset i in the line's text sits at column
+// len(indent)+1+i.
+func (p *parser) parseItem(ln line, scope *keyNode) error {
 	base := len(ln.indent) + 1
 	path, after, err := scanKeyPath(ln.text)
 	if err != nil {
-		// The scan started at the line's first text column;
-		// the scan error's offset lands on the offender.
-		return nil, entry{}, errAtScan(pos{L: ln.num, C: base}, ln.text, err)
+		return errAtScan(pos{L: ln.num, C: base}, ln.text, err)
 	}
 	if after == "" || after[0] != ':' {
-		// The separator must sit where the scan stopped: the
-		// remainder's first column, the honest spot for what
-		// refuses to be one.
-		return nil, entry{}, errAt(pos{L: ln.num, C: base + len(ln.text) - len(after)}, "cannot find key-value separator ':'")
+		return errAt(pos{L: ln.num, C: base + len(ln.text) - len(after)}, "cannot find key-value separator `:`")
 	}
 	for i := range path {
-		path[i].Pos.L = ln.num
-		path[i].Pos.C = base + path[i].offset
+		path[i].pos = pos{L: ln.num, C: base + path[i].offset}
 	}
 	text := strings.TrimLeft(after[1:], " \t")
-	if text == "" {
-		next, ok := p.peekStruct(ln.indent)
-		if !ok || len(next.indent) <= len(ln.indent) {
-			// No value on the line and no deeper block under
-			// it: the error names the key line at its own
-			// start, and spells the key it holds.
-			return nil, entry{}, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
-		}
-		// The block's shape is decided by its first line: a
-		// "- " item opens a list, a fence delimiter a fence,
-		// a --- line a list fence, anything else a map. The
-		// map stays a frame its later siblings may merge
-		// into; the other forms close before they return.
-		switch {
-		case isListItem(next.text):
-			frag, err := p.parseBlockList(next.indent)
-			return path, entry{frag: frag}, err
-		case next.text == `"""` || next.text == `'''`:
-			if err := p.cmtNoFencePrefix(); err != nil {
-				return nil, entry{}, err
-			}
-			frag, err := p.parseFence(next, next.text)
-			return path, entry{frag: frag}, err
-		case next.text == "---":
-			if err := p.cmtNoFencePrefix(); err != nil {
-				return nil, entry{}, err
-			}
-			frag, err := p.parseListFence(next)
-			return path, entry{frag: frag}, err
-		}
-		m, err := p.parseMap(next.indent)
+	if text != "" {
+		rest, err := p.scanPairInto(ln, scope, path, text)
 		if err != nil {
-			return nil, entry{}, err
+			return err
 		}
-		return path, entry{sub: m}, nil
+		return trailing(ln, rest)
 	}
-	if text[0] == '{' {
-		// An inline map in key position stays a frame, not a
-		// fragment: a later line's key path may merge into it
-		// (a: {b: 1} then a.c: 2).
-		pt := pos{L: ln.num, C: len(ln.text) - len(text) + len(ln.indent) + 1}
-		m, rest, err := p.scanInlineMapFrame(ln, text, pt)
+	next, ok := p.peekStruct(ln.indent)
+	if !ok || len(next.indent) <= len(ln.indent) {
+		return errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+	}
+	switch {
+	case isListItem(next.text):
+		// A dashed block: a value defined under the path
+		// like any other.
+	case isStringFence(next.text) || next.text == "---":
+		// Nothing may sit between the pair and its fence.
+		if err := p.cmtNoFencePrefix(); err != nil {
+			return err
+		}
+	default:
+		// A block map: the path expands once, and its items
+		// read straight into the expansion.
+		tip, err := scope.expand(path)
 		if err != nil {
-			return nil, entry{}, err
+			return err
 		}
-		left, _, ok := stripTrail(rest)
-		if !ok && left != "" {
-			// The leftover sits at the line's tail: its own first
-			// column, the honest spot for what refuses to parse.
-			return nil, entry{}, errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
-		}
-		return path, entry{sub: m}, nil
+		return p.parseMap(tip, next.indent)
 	}
-	frag, err := p.parseInline(ln, text)
+	val, err := p.parseBlockValue(next)
 	if err != nil {
-		return nil, entry{}, err
+		return err
 	}
-	return path, entry{frag: frag}, nil
+	return scope.define(path, val)
 }
 
-// isListItem reports whether a line's text opens a block
-// list item: a "-" followed by a blank or the end of the text.
-func isListItem(text string) bool {
-	return text == "-" || strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "-\t")
+// scanPairInto reads a pair's inline value: an inline map
+// expands the path, anything else is defined under it.
+func (p *parser) scanPairInto(ln line, scope *keyNode, path []*keyNode, text string) (string, error) {
+	if text != "" && text[0] == '{' {
+		tip, err := scope.expand(path)
+		if err != nil {
+			return "", err
+		}
+		pt := pos{L: ln.num, C: len(ln.text) - len(text) + len(ln.indent) + 1}
+		return p.scanInlineMapInto(ln, text, pt, tip)
+	}
+	val, rest, err := p.scanValueAt(ln, text)
+	if err != nil {
+		return "", err
+	}
+	return rest, scope.define(path, val)
 }
 
-// parseBlockList reads the "- item" lines of one block list
-// at the exact prefix, straight into the json array: each
-// element scans to its fragment on the spot, a keyed element
-// wrapped in the object its path spells.
-func (p *parser) parseBlockList(prefix string) (string, error) {
-	var elems []string
+// parseBlockList reads one block list's "- item" lines at
+// the exact prefix, keyed elements' paths wrapped around
+// their values.
+func (p *parser) parseBlockList(prefix string) (*keyNode, error) {
+	var elems []*keyNode
 	for {
 		ln, ok := p.peekStruct(prefix)
 		if !ok || ln.indent != prefix || !isListItem(ln.text) {
 			if err := p.checkPending(prefix); err != nil {
-				return "", err
+				return nil, err
 			}
-			return "[" + strings.Join(elems, ",") + "]", nil
+			return &keyNode{list: true, sub: elems}, nil
 		}
 		if err := p.checkPending(prefix); err != nil {
-			return "", err
+			return nil, err
 		}
 		p.pos++
 		text := strings.TrimLeft(ln.text[1:], " \t")
 		if text == "" {
-			// A dash with nothing after it: no key to spell, the
-			// item line's own start carries the error.
-			return "", errAt(indentPos(ln), "cannot omit the value")
+			// A dash with nothing after it.
+			return nil, errAt(indentPos(ln), "cannot omit the value")
 		}
-		var key []*str
+		var path []*keyNode
 		// The inlinepair form: a path and a colon before the
 		// value; without them the whole text is the value.
-		if path, after, kerr := scanKeyPath(text); kerr == nil && after != "" && after[0] == ':' {
+		if k, rest, kerr := scanKeyPath(text); kerr == nil && rest != "" && rest[0] == ':' {
 			off := len(ln.text) - len(text)
-			for i := range path {
-				path[i].Pos.L = ln.num
-				path[i].Pos.C = len(ln.indent) + 1 + off + path[i].offset
+			for i := range k {
+				k[i].pos = pos{L: ln.num, C: len(ln.indent) + 1 + off + k[i].offset}
 			}
-			key = path
-			text = strings.TrimLeft(after[1:], " \t")
+			path = k
+			text = strings.TrimLeft(rest[1:], " \t")
 			if text == "" {
-				// The inlinepair form ends on its colon: the key is
-				// spelled, the item line's own start carries the
-				// error - the same message parseItem raises.
-				return "", errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+				// A path ending on its colon: the same omission
+				// parseItem reports.
+				return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
 			}
 		}
-		frag, err := p.parseInline(ln, text)
+		val, err := p.parseInline(ln, text)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if key != nil {
-			frag = wrapFragment(key, frag)
+		if path != nil {
+			val = wrapPath(path, val)
 		}
-		elems = append(elems, frag)
+		elems = append(elems, val)
 	}
-}
-
-// wrapFragment builds one keyed element's json value: each
-// key segment one single-pair object level deep, the value
-// innermost - a one-segment key wraps the value directly, a
-// multi-segment key nests one object per segment.
-func wrapFragment(key []*str, frag string) string {
-	for i := len(key) - 1; i >= 0; i-- {
-		var b strings.Builder
-		b.WriteString("{")
-		writeJSONString(&b, key[i].Data)
-		b.WriteString(":")
-		b.WriteString(frag)
-		b.WriteString("}")
-		frag = b.String()
-	}
-	return frag
 }
 
 // parseFence reads one fence block from its opening line,
-// already peeked as next, into its json string fragment. The
-// content is the raw lines between the delimiters at the
-// fence's prefix: the closing delimiter closes only at the
-// exact prefix, a shallower non-blank line is an error, a
-// shallower blank contributes the newline only, and deeper
-// lines' excess indent is content. The escaped family
-// processes escapes, with a trailing backslash continuing
-// the line.
+// already peeked as next, into its json string. In the
+// escaped family a trailing backslash continues the line.
 func (p *parser) parseFence(next line, delim string) (string, error) {
 	prefix := next.indent
 	p.pos++ // consume the opening delimiter
-	unfenced := delim == `'''`
+	escaped := delim == `"""`
 	var b strings.Builder
 	indentChar := byte(' ')
 	if len(prefix) > 0 {
@@ -649,9 +670,8 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 	for p.pos < len(p.lines) {
 		ln := p.lines[p.pos]
 		p.pos++
-		// The closing delimiter always closes the fence, even
-		// when the previous line continued: the trailing escape
-		// ate the newline, so the value ends without one.
+		// The close wins even over a continuation: the
+		// escape ate the newline, the value ends without one.
 		if ln.indent == prefix && ln.text == delim {
 			return jsonString(b.String()), nil
 		}
@@ -660,9 +680,7 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 		}
 		if len(ln.indent) < len(prefix) {
 			if ln.text != "" {
-				// A non-empty line at a shallower prefix is a
-				// syntax error: the fence closes only at its
-				// own exact prefix.
+				// Only the exact prefix closes the fence.
 				return "", errAt(indentPos(ln), "cannot close fence at shallower prefix")
 			}
 			// A blank line with a valid but shallower prefix:
@@ -685,16 +703,13 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 		content := ln.indent[len(prefix):] + ln.text
 		contentPos := pos{L: ln.num, C: len(prefix) + 1}
 		continued = false
-		if !unfenced && oddTrailingBackslashes(content) {
+		if escaped && oddTrailingBackslashes(content) {
 			content = content[:len(content)-1]
 			continued = true
 		}
-		if !unfenced {
+		if escaped {
 			unq, err := unescape(content)
 			if err != nil {
-				// The content starts at the fence prefix's column;
-				// the escape error names the backslash's column,
-				// advanced over the content.
 				return "", errAtScan(contentPos, content, err)
 			}
 			content = unq
@@ -728,10 +743,9 @@ func oddTrailingBackslashes(s string) bool {
 	return n%2 == 1
 }
 
-// unescape processes the closed escape set over raw text.
-// Its errors carry the backslash's offset within s, so a
-// caller holding the source position can name the exact
-// column where the escape starts.
+// unescape decodes the closed escape set over raw text. Its
+// errors carry the backslash's offset, for the caller to
+// name the exact column.
 func unescape(s string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -754,14 +768,12 @@ func unescape(s string) (string, error) {
 }
 
 // parseListFence reads one --- delimited list from its
-// opening line, already peeked as next, into its json array
-// fragment. Each element is the lines between two ---
-// delimiters at the fence's exact prefix, parsed as a block
-// value straight into its fragment.
-func (p *parser) parseListFence(next line) (string, error) {
+// opening line, each element the lines between two ---
+// at the fence's exact prefix, parsed as a block value.
+func (p *parser) parseListFence(next line) (*keyNode, error) {
 	prefix := next.indent
 	p.pos++ // consume the opening ---
-	var elems []string
+	var elems []*keyNode
 	nested := "" // the indent of the fence's nested elements, once set
 	for {
 		start := p.pos
@@ -777,143 +789,85 @@ func (p *parser) parseListFence(next line) (string, error) {
 		if !closed {
 			// The fence that never closes is named where it
 			// opened: its own position.
-			return "", errAt(indentPos(next), "cannot find closing list fence")
+			return nil, errAt(indentPos(next), "cannot find closing list fence")
 		}
 		elem := p.lines[start:p.pos]
 		if len(elem) == 0 {
-			// The empty element opens at the delimiter that
-			// closed the previous one - or, for the first
-			// element, the fence's own opening line. The error
-			// names that line at its own position.
+			// The error names the delimiter that opened the
+			// element: the previous element's close, or the
+			// fence's own opening line.
 			open := next
 			if start > 0 {
 				open = p.lines[start-1]
 			}
-			return "", errAt(indentPos(open), "cannot parse empty list fence element")
+			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
-		// The indented elements - nested fences - must share
-		// one indent: the first one's opening --- sets it, and
-		// a later element at a different indent mixes indents
-		// inside the fence.
+		// Nested fences must share one indent: the first
+		// sets it, a mismatched one mixes indents inside
+		// the fence.
 		if elem[0].text == "---" && len(elem[0].indent) > len(prefix) {
 			if nested == "" {
 				nested = elem[0].indent
 			} else if elem[0].indent != nested {
-				return "", errAt(indentPos(elem[0]), "cannot mix indents inside list fence")
+				return nil, errAt(indentPos(elem[0]), "cannot mix indents inside list fence")
 			}
 		}
 		p.pos++
 		sub := &parser{lines: elem}
-		// The element may open with comment and blank lines:
-		// the sub-parser's peek skips them, and the dispatch
-		// reads the first structural line.
 		first, ok := sub.peekStruct(prefix)
 		if !ok {
 			open := next
 			if start > 0 {
 				open = p.lines[start-1]
 			}
-			return "", errAt(indentPos(open), "cannot parse empty list fence element")
+			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
-		frag, err := sub.parseListFenceValue(first, prefix)
+		// The fence's prefix delimits the element: a deeper
+		// line opens a nested block only as a list fence.
+		if first.indent != prefix && !(first.text == "---" && len(first.indent) > len(prefix)) {
+			return nil, errAt(indentPos(first), "list element indent must align with fence")
+		}
+		val, err := sub.parseBlockValue(first)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if sub.pos != len(sub.lines) {
-			// The leftover line at its own start: the content
-			// that comes after the element's value.
-			return "", errAt(indentPos(sub.lines[sub.pos]), "cannot parse content in list fence element")
+			// Content after the element's value.
+			return nil, errAt(indentPos(sub.lines[sub.pos]), "cannot parse content in list fence element")
 		}
-		elems = append(elems, frag)
-		// The terminator consumed above ends this element; the
-		// fence continues when the next structural line sits at
-		// the fence's prefix - the next element's first line -
-		// or deeper: a nested list fence element opens at a
-		// deeper prefix. A shallower line closes the fence; it
+		elems = append(elems, val)
+		// The fence continues while the next line sits at its
+		// prefix or deeper; a shallower line closes it and
 		// stays in the stream for the parent.
-		ln, ok := p.peekStruct(prefix)
-		if !ok || len(ln.indent) < len(prefix) {
-			return "[" + strings.Join(elems, ",") + "]", nil
+		if ln, ok := p.peekStruct(prefix); !ok || len(ln.indent) < len(prefix) {
+			return &keyNode{list: true, sub: elems}, nil
 		}
 	}
-}
-
-// parseListFenceValue reads one element of a list fence from
-// its first line, already peeked, into its json fragment:
-// the element is an inline value on its own line, or a
-// block - a dashed list, a map, a fence, or a nested list
-// fence.
-func (p *parser) parseListFenceValue(first line, fence string) (string, error) {
-	switch {
-	case first.indent == fence:
-		switch {
-		case isListItem(first.text):
-			return p.parseBlockList(first.indent)
-		case first.text == `"""` || first.text == `'''`:
-			return p.parseFence(first, first.text)
-		case looksLikeItem(first.text):
-			m, err := p.parseMap(first.indent)
-			if err != nil {
-				return "", err
-			}
-			return m.serialize(), nil
-		default:
-			// An inline value on the element's only line.
-			p.pos++ // consume the value's own line
-			return p.parseInline(first, first.text)
-		}
-	case first.text == "---" && len(first.indent) > len(fence):
-		// A nested list fence: deeper than the enclosing
-		// fence's delimiters.
-		return p.parseListFence(first)
-	}
-	// A dashed list, a map, or an inline item at a deeper
-	// prefix: only a nested list fence opens a deeper block
-	// inside a fence. The offending element is named at its
-	// own position - the line the deeper block opened at.
-	return "", errAt(indentPos(first), "list element indent must align with fence")
-}
-
-// cmtNoFencePrefix rejects the pending run before a fence
-// value: the fence must open at the very next line after
-// its pair, so a comment or a blank between them has no
-// home - not the fence's content, which is the string, and
-// not the pair's line, which is above. The error names the
-// offending line at its own position.
-func (p *parser) cmtNoFencePrefix() error {
-	for _, ln := range p.pending {
-		if ln.text != "" {
-			return errAt(indentPos(ln), "cannot comment between key and fence")
-		}
-		return errAt(indentPos(ln), "cannot blank between key and fence")
-	}
-	return nil
 }
 
 // parseInline reads one inline value on the item's line into
-// its json fragment. It may carry a trailing comment, which
-// the fragment drops.
-func (p *parser) parseInline(ln line, text string) (string, error) {
-	frag, rest, err := p.scanValueAt(ln, text)
+// its node.
+func (p *parser) parseInline(ln line, text string) (*keyNode, error) {
+	val, rest, err := p.scanValueAt(ln, text)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	left, _, ok := stripTrail(rest)
-	if ok {
-		return frag, nil
-	}
-	if left != "" {
-		// The leftover sits at the line's tail: its own first
-		// column, the honest spot for what refuses to parse.
-		return "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
-	}
-	return frag, nil
+	return val, trailing(ln, rest)
 }
 
-// stripTrail splits a trailing comment off the rest of a
-// value: at least one blank, then #, then free text to the
-// end of the line. The blank is required - a # glued to the
-// value is content, not a comment.
+// trailing accepts what follows a value on its line: nothing,
+// or a comment.
+func trailing(ln line, rest string) error {
+	left, _, ok := stripTrail(rest)
+	if ok || left == "" {
+		return nil
+	}
+	return errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
+}
+
+// stripTrail splits a trailing comment - at least one blank,
+// then # - off the rest of a value. A # glued to the value
+// is content, not a comment.
 func stripTrail(rest string) (left, cmt string, ok bool) {
 	i := 0
 	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
@@ -926,18 +880,24 @@ func stripTrail(rest string) (left, cmt string, ok bool) {
 }
 
 // scanValueAt reads one inline value from the front of text
-// into its json fragment, returning the unread remainder.
-func (p *parser) scanValueAt(ln line, text string) (string, string, error) {
+// into its node, returning the unread remainder.
+func (p *parser) scanValueAt(ln line, text string) (*keyNode, string, error) {
 	pt := pos{L: ln.num, C: len(ln.text) - len(text) + len(ln.indent) + 1}
 	if text == "" {
-		// An empty scan: the caller's text is spent - the
-		// unclosed list's tail is the usual source. The
-		// error names the empty scan's start.
-		return "", "", errAt(pt, "cannot parse value at \"\"")
+		// An empty scan: the usual source is an unclosed
+		// list's spent tail.
+		return nil, "", errAt(pt, "cannot parse value at \"\"")
 	}
 	switch text[0] {
 	case '{':
-		return p.scanInlineMap(ln, text, pt)
+		// A fresh scope: nothing later reaches into a
+		// value-position map.
+		m := &keyNode{sub: []*keyNode{}}
+		rest, err := p.scanInlineMapInto(ln, text, pt, m)
+		if err != nil {
+			return nil, "", err
+		}
+		return m, rest, nil
 	case '[':
 		return p.scanInlineList(ln, text, pt)
 	case '"':
@@ -946,153 +906,146 @@ func (p *parser) scanValueAt(ln line, text string) (string, string, error) {
 		}
 		s, rest, err := scanDoubleQuoted(text)
 		if err != nil {
-			// The quoted value opens at pt; its escape errors
-			// name the backslash's column, advanced over the
-			// token.
-			return "", "", errAtScan(pt, text, err)
+			return nil, "", errAtScan(pt, text, err)
 		}
-		return jsonString(s), rest, nil
+		return &keyNode{json: jsonString(s)}, rest, nil
 	case '\'':
 		if strings.HasPrefix(text, `'''`) {
 			return p.scanFencedLine(ln, text, `'`, pt)
 		}
 		s, rest, err := scanSingleQuoted(text)
 		if err != nil {
-			// The single-quoted value opens at pt too; its one
-			// error - the missing close - names it there.
-			return "", "", errAt(pt, err.Error())
+			return nil, "", errAt(pt, err.Error())
 		}
-		return jsonString(s), rest, nil
+		return &keyNode{json: jsonString(s)}, rest, nil
 	}
-	tok, rest := scanNumberToken(text)
+	tok, rest := scanScalarToken(text)
 	switch tok {
 	case "null", "true", "false":
-		return tok, rest, nil
+		return &keyNode{json: tok}, rest, nil
 	case "":
-		// No token at all - the text starts outside every
-		// scanned class. The error names the empty token's
-		// start, the same anchor the other raises use.
-		return "", "", errAt(pt, fmt.Sprintf("cannot parse value at %q", text))
+		// The text starts outside every scanned class.
+		return nil, "", errAt(pt, fmt.Sprintf("cannot parse value at %q", text))
 	}
-	// A bare word is never a value: the token must be
-	// number-shaped to be a number.
+	val, err := scanNumber(tok, pt)
+	if err != nil {
+		return nil, "", err
+	}
+	return val, rest, nil
+}
+
+// scanNumber validates a number-shaped token and encodes
+// its node. A bare word is never a value; based forms
+// convert to decimal on the spot.
+func scanNumber(tok string, pt pos) (*keyNode, error) {
 	body := strings.TrimPrefix(tok, "-")
 	if body == "" || body[0] < '0' || body[0] > '9' {
-		return "", "", errAt(pt, fmt.Sprintf("cannot parse unquoted value %q", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse unquoted value %q", tok))
 	}
-	// The base prefixes carry their own digit grammar.
-	for _, pfx := range []struct {
-		prefix string
-		base   int
-	}{
-		{"0x", 16}, {"0o", 8}, {"0b", 2},
-	} {
-		if strings.HasPrefix(body, pfx.prefix) {
-			digits := body[len(pfx.prefix):]
-			if digits == "" {
-				return "", "", errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
+	if len(body) > 2 && body[0] == '0' {
+		bases := []byte{'x', 16, 'o', 8, 'b', 2}
+		for i := 0; i < len(bases); i += 2 {
+			if bases[i] != body[1] {
+				continue
 			}
+			base := int(bases[i+1])
+			digits := body[2:]
 			for _, c := range digits {
-				if v := digitVal(c); v < 0 || v >= pfx.base {
-					return "", "", errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
+				if v := digitVal(c); v < 0 || v >= base {
+					return nil, errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
 				}
 			}
-			return numberFragment(tok), rest, nil
+			json := baseToDecimal(digits, base)
+			if len(body) != len(tok) {
+				json = "-" + json // the sign the scanner cut off
+			}
+			return &keyNode{json: json}, nil
 		}
 	}
-	// The grammar is lowercase-only: uppercase exponents are
-	// errors, and so are redundant leading zeros.
 	if strings.ContainsRune(body, 'E') {
-		return "", "", errAt(pt, fmt.Sprintf("cannot parse number %q: uppercase exponent", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q: uppercase exponent", tok))
 	}
 	if len(body) > 1 && body[0] == '0' && body[1] >= '0' && body[1] <= '9' {
-		return "", "", errAt(pt, fmt.Sprintf("cannot parse number %q: redundant leading zero", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q: redundant leading zero", tok))
 	}
 	if !isDecimalShape(body) {
-		return "", "", errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
 	}
-	return tok, rest, nil
+	return &keyNode{json: tok}, nil
 }
 
-// isDecimalShape reports whether body matches the grammar's
-// decimal spellings: numint [ "." 1*DIGIT ] [ "e" ["+" / "-"]
-// 1*DIGIT ]. The redundant leading zero is checked
-// separately, for its own message.
-func isDecimalShape(body string) bool {
-	mantissa := body
-	if i := strings.IndexByte(body, 'e'); i >= 0 {
-		mantissa = body[:i]
-		exp := body[i+1:]
-		if exp == "" {
-			return false
-		}
-		if exp[0] == '+' || exp[0] == '-' {
-			exp = exp[1:]
-		}
-		if !allDigits(exp) {
-			return false
-		}
+// scanInlineList reads "[1, 2]" in the one-line form into a list node.
+func (p *parser) scanInlineList(ln line, text string, at pos) (*keyNode, string, error) {
+	var elems []*keyNode
+	text = strings.TrimLeft(text[1:], " \t")
+	if strings.HasPrefix(text, "]") {
+		return &keyNode{list: true}, text[1:], nil
 	}
-	intPart := mantissa
-	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
-		intPart = mantissa[:i]
-		if !allDigits(mantissa[i+1:]) {
-			return false
+	for {
+		val, rest, err := p.scanValueAt(ln, text)
+		if err != nil {
+			return nil, "", err
 		}
+		elems = append(elems, val)
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			// Named where it opened, so nested lists tell apart.
+			return nil, "", errAt(at, "cannot find closing `]`")
+		}
+		if rest[0] == ']' {
+			return &keyNode{list: true, sub: elems}, rest[1:], nil
+		}
+		if rest[0] != ',' {
+			return nil, "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside list", rest))
+		}
+		text = strings.TrimLeft(rest[1:], " \t")
 	}
-	return intPart != "" && allDigits(intPart)
 }
 
-func allDigits(s string) bool {
-	if s == "" {
-		return false
+// scanInlineMapInto reads "{ a: 1, b: 2 }" in the native item
+// grammar into the scope, returning the unread remainder.
+func (p *parser) scanInlineMapInto(ln line, text string, at pos, scope *keyNode) (string, error) {
+	text = strings.TrimLeft(text[1:], " \t")
+	if strings.HasPrefix(text, "}") {
+		return text[1:], nil
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
+	for {
+		off := len(ln.text) - len(text)
+		path, after, err := scanKeyPath(text)
+		if err != nil {
+			return "", errAtScan(pos{L: ln.num, C: len(ln.indent) + 1 + off}, text, err)
 		}
+		if after == "" || after[0] != ':' {
+			return "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + off + len(text) - len(after)}, "cannot find key-value separator `:`")
+		}
+		for i := range path {
+			path[i].pos = pos{L: ln.num, C: len(ln.indent) + 1 + off + path[i].offset}
+		}
+		rest, err := p.scanPairInto(ln, scope, path, strings.TrimLeft(after[1:], " \t"))
+		if err != nil {
+			return "", err
+		}
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			// Named where it opened, so nested maps tell apart.
+			return "", errAt(at, "cannot find closing `}`")
+		}
+		if rest[0] == '}' {
+			return rest[1:], nil
+		}
+		if rest[0] != ',' {
+			return "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside map", rest))
+		}
+		text = strings.TrimLeft(rest[1:], " \t")
 	}
-	return true
 }
 
-// scanNumberToken reads one number-shaped token: an optional
-// leading minus, digits, letters for the bases, dots, and a
-// sign directly after an exponent e.
-func scanNumberToken(text string) (tok, rest string) {
-	cut := 0
-	if cut < len(text) && text[cut] == '-' {
-		cut++
-	}
-	for cut < len(text) {
-		c := text[cut]
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '.':
-			cut++
-		case (c == '+' || c == '-') && cut > 0 && (text[cut-1] == 'e' || text[cut-1] == 'E'):
-			cut++
-		default:
-			return text[:cut], text[cut:]
-		}
-	}
-	return text, ""
-}
-
-// scanFencedLine reads the single-line fence forms, """..."""
-// and ”'...”', where the escapes stand for the newlines of
-// the block form, into the json string fragment of the
-// interior they spell. The fence closes at the first
-// delimiter; whatever follows is the caller's to read - a
-// trailing comment, or an error when it is not one. A stray
-// quote after the close, as in ”foo', is a syntax error,
-// not content - the grammar is ambiguous there, and the
-// typo reading wins. In the escaped family the search skips
-// escape sequences, so a \" in the content cannot open a
-// false delimiter.
-func (p *parser) scanFencedLine(ln line, text, quote string, at pos) (string, string, error) {
+// scanFencedLine reads a one-line fence. The first delimiter
+// closes; in the escaped family the search skips escapes.
+func (p *parser) scanFencedLine(ln line, text, quote string, at pos) (*keyNode, string, error) {
 	delim := strings.Repeat(quote, 3)
 	end := -1
 	if quote == `"` {
-		unfenced := false
 		i := 3
 		for i <= len(text)-3 {
 			if text[i] == '\\' {
@@ -1105,179 +1058,44 @@ func (p *parser) scanFencedLine(ln line, text, quote string, at pos) (string, st
 			}
 			i++
 		}
-		if end < 0 {
-			return "", "", errAt(at, "cannot find closing fence")
-		}
-		inner := text[3 : 3+end]
-		innerPos := pos{L: at.L, C: at.C + 3}
+	} else {
+		end = strings.Index(text[3:], delim)
+	}
+	if end < 0 {
+		return nil, "", errAt(at, "cannot find closing fence")
+	}
+	inner := text[3 : 3+end]
+	innerPos := pos{L: at.L, C: at.C + 3}
+	rest := text[3+end+3:]
+	if quote == `"` {
 		unq, err := unescape(inner)
 		if err != nil {
-			// The interior starts three quotes past the token
-			// start; the escape error names the backslash's
-			// column, advanced over the interior.
-			_ = unfenced
-			return "", "", errAtScan(innerPos, inner, err)
+			return nil, "", errAtScan(innerPos, inner, err)
 		}
-		return jsonString(unq), text[3+end+3:], nil
-	}
-	end = strings.Index(text[3:], delim)
-	if end < 0 {
-		return "", "", errAt(at, "cannot find closing fence")
+		return &keyNode{json: jsonString(unq)}, rest, nil
 	}
 	// The raw family holds the interior as it stands.
-	return jsonString(text[3 : 3+end]), text[3+end+3:], nil
-}
-
-// scanInlineList reads "[1, 2]" in the one-line form into
-// its json array fragment. Elements are inline values,
-// recursing through scanValueAt, so nested lists work with
-// no extra code.
-func (p *parser) scanInlineList(ln line, text string, at pos) (string, string, error) {
-	var elems []string
-	text = strings.TrimLeft(text[1:], " \t")
-	if strings.HasPrefix(text, "]") {
-		return "[]", text[1:], nil
-	}
-	for {
-		frag, rest, err := p.scanValueAt(ln, text)
-		if err != nil {
-			return "", "", err
-		}
-		elems = append(elems, frag)
-		rest = strings.TrimLeft(rest, " \t")
-		if rest == "" {
-			// The list that never closes is named where it
-			// opened: its own start, so nested lists tell apart.
-			return "", "", errAt(at, "cannot find closing ']'")
-		}
-		if rest[0] == ']' {
-			return "[" + strings.Join(elems, ",") + "]", rest[1:], nil
-		}
-		if rest[0] != ',' {
-			// The leftover at its own first column: the honest
-			// spot for what refuses to be a separator.
-			return "", "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside list", rest))
-		}
-		text = strings.TrimLeft(rest[1:], " \t")
-	}
-}
-
-// scanInlineMap reads "{ a: 1, b: 2 }" in the native item
-// grammar into its json object fragment: the frame the
-// pairs build, serialized the moment the closing brace
-// lands - nothing after the line can reach it anymore.
-func (p *parser) scanInlineMap(ln line, text string, at pos) (string, string, error) {
-	m, rest, err := p.scanInlineMapFrame(ln, text, at)
-	if err != nil {
-		return "", "", err
-	}
-	return m.serialize(), rest, nil
-}
-
-// scanInlineMapFrame reads "{ a: 1, b: 2 }" in the native
-// item grammar into one frame. The pairs read through the
-// same key path splitting and merge rules a block map's
-// do.
-func (p *parser) scanInlineMapFrame(ln line, text string, at pos) (*frame, string, error) {
-	m := &frame{}
-	text = strings.TrimLeft(text[1:], " \t")
-	if strings.HasPrefix(text, "}") {
-		return m, text[1:], nil
-	}
-	for {
-		off := len(ln.text) - len(text)
-		path, after, err := scanKeyPath(text)
-		if err != nil {
-			// The scan started at the current text's column;
-			// the scan error's offset lands on the offender.
-			return nil, "", errAtScan(pos{L: ln.num, C: len(ln.indent) + 1 + off}, text, err)
-		}
-		if after == "" || after[0] != ':' {
-			// The separator must sit where the scan stopped:
-			// the remainder's first column, the honest spot
-			// for what refuses to be one.
-			return nil, "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + off + len(text) - len(after)}, "cannot find key-value separator ':'")
-		}
-		for i := range path {
-			path[i].Pos.L = ln.num
-			path[i].Pos.C = len(ln.indent) + 1 + off + path[i].offset
-		}
-		frag, rest, err := p.scanValueAt(ln, strings.TrimLeft(after[1:], " \t"))
-		if err != nil {
-			return nil, "", err
-		}
-		if err := attach(m, path, entry{frag: frag}); err != nil {
-			return nil, "", err
-		}
-		rest = strings.TrimLeft(rest, " \t")
-		if rest == "" {
-			// The map that never closes is named where it
-			// opened: its own start, so nested maps tell apart.
-			return nil, "", errAt(at, "cannot find closing '}'")
-		}
-		if rest[0] == '}' {
-			return m, rest[1:], nil
-		}
-		if rest[0] != ',' {
-			// The leftover at its own first column: the honest
-			// spot for what refuses to be a separator.
-			return nil, "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside map", rest))
-		}
-		text = strings.TrimLeft(rest[1:], " \t")
-	}
+	return &keyNode{json: jsonString(text[3 : 3+end])}, rest, nil
 }
 
 //
-// The byte scanners, verbatim from the cnfast parser: the
-// grammar's tokens, with their errors carrying the offset of
-// the offender within the scanned text, so the callers name
-// the exact column.
+// The byte scanners: the grammar's tokens, errors carrying the offender's offset.
 //
 
-// A scanError is an error a byte scanner raises inside the
-// text it was scanning.
-type scanError struct {
-	offset int
-	msg    string
-}
-
-func (e scanError) Error() string { return e.msg }
-
-// A str is one key segment: its decoded data, its quoting
-// style for the error messages that spell a key path, its
-// source position, and its offset within the scanned path.
-type str struct {
-	Data   string
-	Quote  quoteKind
-	Pos    pos
-	offset int
-}
-
-// A quoteKind is the quoting style of a key segment.
-type quoteKind int
-
-const (
-	unquoted     quoteKind = iota // bare word
-	doubleQuoted                  // "..."
-	singleQuoted                  // '...'
-)
-
-// scanKeyPath reads a dotted path of key segments, recording
-// each segment's offset within the original text for
-// position tracking. Spaces are rejected: between segments,
-// after the dot, or before the colon.
-func scanKeyPath(text string) ([]*str, string, error) {
+// scanKeyPath reads a dotted path, recording each segment's
+// offset within the original text for position tracking.
+// Spaces never separate path parts.
+func scanKeyPath(text string) ([]*keyNode, string, error) {
 	if text == "" || text[0] == '.' {
 		return nil, "", scanError{0, "cannot parse empty key segment"}
 	}
-	var segs []*str
+	var segs []*keyNode
 	consumed := 0
 	for {
 		seg, after, err := scanKey(text)
 		if err != nil {
-			// A segment scanner error names its spot within the
-			// segment; the path advances it by what came before,
-			// so the offset lands in the whole path's frame.
+			// The segment's offset must move into the whole
+			// path's frame.
 			if serr, ok := err.(scanError); ok {
 				serr.offset += consumed
 				return nil, "", serr
@@ -1305,9 +1123,8 @@ func scanKeyPath(text string) ([]*str, string, error) {
 	}
 }
 
-// scanKey reads one key segment: a bare word or a quoted
-// string.
-func scanKey(text string) (*str, string, error) {
+// scanKey reads one key segment: a bare word or a quoted string.
+func scanKey(text string) (*keyNode, string, error) {
 	if text == "" {
 		return nil, "", scanError{0, "cannot parse empty key segment"}
 	}
@@ -1317,13 +1134,13 @@ func scanKey(text string) (*str, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		return &str{Data: s, Quote: doubleQuoted}, rest, nil
+		return &keyNode{key: s, quote: doubleQuoted}, rest, nil
 	case '\'':
 		s, rest, err := scanSingleQuoted(text)
 		if err != nil {
 			return nil, "", err
 		}
-		return &str{Data: s, Quote: singleQuoted}, rest, nil
+		return &keyNode{key: s, quote: singleQuoted}, rest, nil
 	}
 	seg, rest := scanWord(text)
 	if seg == "" {
@@ -1331,17 +1148,15 @@ func scanKey(text string) (*str, string, error) {
 	}
 	for _, r := range seg {
 		if !isBareRune(r) {
-			// A bad word is named at its start: the offset is
-			// the segment's own, the caller's consumed count
-			// locating it within the path.
+			// Named at the segment start, so the path's
+			// consumed count locates it.
 			return nil, "", scanError{0, fmt.Sprintf("cannot parse key %q", seg)}
 		}
 	}
-	return &str{Data: seg, Quote: unquoted}, rest, nil
+	return &keyNode{key: seg, quote: unquoted}, rest, nil
 }
 
-// scanDoubleQuoted reads a double-quoted string, processing
-// escapes.
+// scanDoubleQuoted reads a double-quoted string, processing escapes.
 func scanDoubleQuoted(text string) (string, string, error) {
 	var b strings.Builder
 	i := 1
@@ -1368,8 +1183,7 @@ func scanDoubleQuoted(text string) (string, string, error) {
 	return "", "", fmt.Errorf("cannot find closing quote")
 }
 
-// scanSingleQuoted reads a single-quoted string: raw, no
-// escapes.
+// scanSingleQuoted reads a single-quoted string: raw, no escapes.
 func scanSingleQuoted(text string) (string, string, error) {
 	end := strings.IndexByte(text[1:], '\'')
 	if end < 0 {
@@ -1483,16 +1297,70 @@ func digitVal(c rune) int {
 	return -1
 }
 
-//
-// The json fragments
-//
-
-// jsonString writes s as a quoted json string fragment.
-func jsonString(s string) string {
-	var b strings.Builder
-	writeJSONString(&b, s)
-	return b.String()
+// scanScalarToken reads the maximal token that could spell
+// a scalar; the caller tells number, keyword, or bare word.
+func scanScalarToken(text string) (tok, rest string) {
+	cut := 0
+	if cut < len(text) && text[cut] == '-' {
+		cut++
+	}
+	for cut < len(text) {
+		c := text[cut]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '.':
+			cut++
+		case (c == '+' || c == '-') && cut > 0 && (text[cut-1] == 'e' || text[cut-1] == 'E'):
+			cut++
+		default:
+			return text[:cut], text[cut:]
+		}
+	}
+	return text, ""
 }
+
+// isDecimalShape matches the grammar's decimal spellings:
+// numint [ "." 1*DIGIT ] [ "e" ["+" / "-"] 1*DIGIT ]. The
+// redundant leading zero gets its own message.
+func isDecimalShape(body string) bool {
+	mantissa := body
+	if i := strings.IndexByte(body, 'e'); i >= 0 {
+		mantissa = body[:i]
+		exp := body[i+1:]
+		if exp == "" {
+			return false
+		}
+		if exp[0] == '+' || exp[0] == '-' {
+			exp = exp[1:]
+		}
+		if !allDigits(exp) {
+			return false
+		}
+	}
+	intPart := mantissa
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		intPart = mantissa[:i]
+		if !allDigits(mantissa[i+1:]) {
+			return false
+		}
+	}
+	return intPart != "" && allDigits(intPart)
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+//
+// The json encoding of the leaf values
+//
 
 // writeJSONString writes s as a json string: the closed set
 // escaped, the rest verbatim.
@@ -1528,28 +1396,16 @@ func escapeJSON(r rune) string {
 	return string(r)
 }
 
-// numberFragment writes one number as its json form: the
-// decimal forms pass through verbatim - 1.20 keeps its zeros,
-// and integers too wide for a float64 keep their precision -
-// and the other bases convert to decimal, any width, by
-// repeated division of the digit string.
-func numberFragment(word string) string {
-	switch {
-	case strings.HasPrefix(word, "0x"):
-		return baseToDecimal(word[2:], 16)
-	case strings.HasPrefix(word, "0o"):
-		return baseToDecimal(word[2:], 8)
-	case strings.HasPrefix(word, "0b"):
-		return baseToDecimal(word[2:], 2)
-	}
-	return word
+// jsonString writes s as a quoted json string.
+func jsonString(s string) string {
+	var b strings.Builder
+	writeJSONString(&b, s)
+	return b.String()
 }
 
-// baseToDecimal converts a digit string in the given base -
-// already validated by the scanner - to its decimal form, by
-// repeated division by 10: each pass walks the digits once,
-// most significant first, carrying the remainder - one
-// decimal digit out per pass, least significant first.
+// baseToDecimal converts a digit string - already validated
+// by the scanner - to decimal by repeated division by 10:
+// one decimal digit per pass, least significant first.
 func baseToDecimal(digits string, base int) string {
 	var out []byte
 	for digits != "" {
@@ -1565,9 +1421,8 @@ func baseToDecimal(digits string, base int) string {
 			}
 			carry = cur % 10
 		}
-		// Strip the leading zeros the quotient accumulated; an
-		// empty result means the value hit zero and the loop
-		// ends.
+		// Strip the quotient's leading zeros; an empty
+		// quotient ends the loop.
 		i := 0
 		for i < len(quot) && quot[i] == '0' {
 			i++
@@ -1583,13 +1438,12 @@ func baseToDecimal(digits string, base int) string {
 }
 
 //
-// The cnf quote spelling, kept only for the error messages
-// that name a key path: each segment in its recorded family.
+// The cnf quote spelling, for the error messages that name a key path.
 //
 
-// Quote returns s quoted and escaped in the q family - one
+// quote returns s quoted and escaped in the q family - one
 // of the three families a key segment can hold.
-func Quote(s string, q quoteKind) string {
+func quote(s string, q quoteKind) string {
 	switch q {
 	case unquoted:
 		if isBareWord(s) {

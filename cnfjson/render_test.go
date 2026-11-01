@@ -22,14 +22,9 @@ import (
 	"github.com/canonical/go-cnf/cnfjson"
 )
 
-// renderJSONTests is the RenderJSON table against the AST
-// the text paths never produce, nor validate: a hand-built
-// tree reaches the render unchanged by the parser's gates -
-// its digit grammar, its conflict check - so both the
-// render's own checks and the keyTree's redefinition rule
-// are pinned here, error rows included: the message the
-// tree emits, positioned when the AST carries a position
-// and bare when it does not, matched verbatim.
+// renderJSONTests reaches the render past the parser's
+// gates, so the render's own checks and the keyTree's
+// redefinition rule are pinned here, error rows included.
 var renderJSONTests = []struct {
 	name  string
 	value cnfast.Value // the root's value
@@ -88,11 +83,6 @@ var renderJSONTests = []struct {
 	err: "2:1: cannot redefine previous key `a`",
 }}
 
-// TestRenderJSON pins RenderJSON against the ASTs the text
-// paths never produce: rows render to their JSON, or fail
-// with the exact message the row names - the render's own
-// gates, and the keyTree's redefinition rule, both doors
-// the parser does not stand at.
 func TestRenderJSON(t *testing.T) {
 	for _, tc := range renderJSONTests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,9 +126,6 @@ func num(text string) cnfast.Value {
 	return &cnfast.Num{Text: text}
 }
 
-// at positions one item's first key segment: the hand-built
-// tree's one source fact, the position an item's message
-// prefixes when the render reports it.
 func at(line, col int, it *cnfast.Item) *cnfast.Item {
 	it.Key[0].Pos = cnfast.Pos{L: line, C: col}
 	return it
