@@ -13,12 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package cnfembed is a minimal, single-file translator from
-// cnf text to json text. The whole document preprocesses into
-// one tree of map scopes - a keyNode per key, paths dissolved
-// into single segments, lists nested with fresh scopes inside
-// - then marshals out. Scalars are json-encoded at scan time;
-// error messages and positions are cnfast's, kept verbatim.
+// Package cnfembed is a standalone single-file conformant implementation
+// of cnf that translates it to json, preserving order and text style where
+// possible. This layout makes it optimal for copying and embedding into
+// projects that would like to use cnf for reading configuration files but
+// would rather not add an additional external dependency.
 package cnfembed
 
 import (
