@@ -20,23 +20,17 @@ import (
 	"strings"
 )
 
-// RenderOptions are the settings of one Render call. None
-// exist yet; the parameter exists so that render-side knobs
-// can be added later without another breaking change.
+// RenderOptions are the settings of one Render call. None exist yet; the
+// parameter exists so settings can be added without a breaking change.
 type RenderOptions struct{}
 
 // Render renders the provided hierarchy as cnf text.
 func Render(root *Item, opts *RenderOptions) ([]byte, error) {
 	var b strings.Builder
-	// The root value is a keyless item. The comment runs
-	// render around the value: the inline forms on the item's
-	// line with their trailing comment, the block forms
-	// opening at the value's own Indent, which is empty at
-	// the top.
+	// The root value is a keyless item; its comment runs render around it.
 	writeCmt(&b, root.PreCmt, "")
 	if isBlock(root.Value) {
-		// The root has no pair to open under, so its block
-		// sits at column zero.
+		// The root has no pair to open under: its block sits at column zero.
 		if err := writeBlock(&b, root.Value, "", root.HeadCmt, root.FootCmt); err != nil {
 			return nil, err
 		}
@@ -53,9 +47,8 @@ func Render(root *Item, opts *RenderOptions) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// writeCmt writes one comment run at the given indent: each
-// line with the indent re-added, and a newline after each.
-// A blank line is the empty string, so it gets no indent.
+// writeCmt writes one comment run at the given indent, a newline after
+// each line; a blank line is the empty string, so it gets no indent.
 func writeCmt(b *strings.Builder, c Cmt, indent string) {
 	for _, ln := range c.Text {
 		if ln != "" {
@@ -66,10 +59,6 @@ func writeCmt(b *strings.Builder, c Cmt, indent string) {
 	}
 }
 
-// isBlock reports whether a value is recorded in one of its
-// block forms: a block map, a block list, or a fence-block
-// string. Anything else - a number, a scalar, an inline
-// spelling - sits on its line.
 func isBlock(v Value) bool {
 	switch n := v.(type) {
 	case *Map:
@@ -82,11 +71,9 @@ func isBlock(v Value) bool {
 	return false
 }
 
-// writeBlock writes one block value at the given indent: a
-// map, a list, or a fence, chosen by the node's type. The
-// node's own fields carry the form: a block map renders its
-// pairs, a block list its items or its --- delimiters, a
-// string its fence.
+// writeBlock writes one block value at the given indent, its own fields
+// carrying the form: a map renders its pairs, a list its items or ---
+// delimiters, a string its fence.
 func writeBlock(b *strings.Builder, v Value, indent string, head, foot Cmt) error {
 	switch n := v.(type) {
 	case *Map:
@@ -100,27 +87,14 @@ func writeBlock(b *strings.Builder, v Value, indent string, head, foot Cmt) erro
 	return fmt.Errorf("cannot render %T as a block", v)
 }
 
-// writeStr writes one string in the asked layout, every shape
-// the grammar holds: bare, quoted, compact fence inline, and
-// the fence block at the indent. The four rules of the Text
-// contract open the body and decode into one pair - whether
-// the recorded Text is written, and the content under either
-// source:
-//
-//	Text nil, Str ""    - fresh, the empty string
-//	Text nil, Str set   - fresh: the content spells
-//	Text set, Str ""    - recorded: the Text renders unverified
-//	Text set, Str set   - recorded when the decode matches Str,
-//	                      else the render refuses rather than
-//	                      pick a side
-//
-// The shapes below write the recorded elements verbatim when
-// the layout is the one the record was made for, and spell the
-// content fresh when it is not.
+// writeStr writes one string in the asked layout: bare, quoted, compact
+// fence inline, or the fence block. Text nil spells the content fresh;
+// Text set renders verbatim, and when Str also holds a value the two must
+// agree, else the render refuses rather than pick a side. A record writes
+// verbatim only in the layout it was made for.
 func writeStr(b *strings.Builder, s *Str, indent string) error {
-	// The four rules. A recorded Text always decodes to the
-	// content - it is what a respell writes - and when Str
-	// also holds one, the two must agree.
+	// A recorded Text must decode to the content - it is what a respell
+	// writes - and when Str also holds one, the two must agree.
 	texted, decoded := false, s.Data
 	if s.Text != nil {
 		var db strings.Builder
@@ -134,8 +108,8 @@ func writeStr(b *strings.Builder, s *Str, indent string) error {
 		texted, decoded = true, v
 	}
 	fenced := s.Quote == SingleFenced || s.Quote == DoubleFenced
-	// A compact record: one element carrying no tail, the
-	// recorded interior of a one-line fence.
+	// A compact record: one element carrying no tail - the recorded
+	// interior of a one-line fence.
 	compact := texted && fenced && len(s.Text) == 1 &&
 		!strings.HasSuffix(s.Text[0], "\n") &&
 		!oddTrailingBackslashes(s.Text[0])
@@ -159,11 +133,8 @@ func writeStr(b *strings.Builder, s *Str, indent string) error {
 		// A quoted family demanded as a block: no such shape.
 		return fmt.Errorf("cannot render %T as a block", s)
 	}
-	// The block fence. A recorded block - made for this shape,
-	// every element carrying its own tail - writes verbatim:
-	// the opening delimiter, each element with a physical
-	// newline only when it lacks one (a marker line), and the
-	// closing delimiter.
+	// A recorded block - made for this shape, every element carrying its
+	// own tail - writes verbatim.
 	if texted && !compact {
 		delim := "'''"
 		if s.Quote == DoubleFenced {
@@ -184,40 +155,24 @@ func writeStr(b *strings.Builder, s *Str, indent string) error {
 		b.WriteString("\n")
 		return nil
 	}
-	// Everything else spells fresh: encode writes the fence
-	// from the content, choosing the family and marking away a
-	// missing final newline. The four rules leave decoded equal
-	// to Str here, so encode reads the same content.
+	// Everything else spells fresh: encode writes the fence from the
+	// content, marking away a missing final newline.
 	_, err := s.encode(b, indent, nil)
 	return err
 }
 
-// decode writes the decoded value of Text into b
-// without storing it into Str. The render uses it to check
-// that Text still matches Str before writing either one: if
-// they disagree, someone changed Str without calling Set,
-// and the render fails rather than guess which of the two is
-// current.
-//
-// Decoding follows the same rules as parsing a fence: each
-// element is unescaped for the triple-quoted family, a
-// marker tail - an odd run of backslashes - continues onto
-// the next element (the marker is dropped, and no newline is
-// inserted), and every other tail - the terminator - is kept
-// as part of the value. The recorded elements carry their own
-// tails, so the decode copies them plainly. With Text unset,
-// Str is the decoded value already, and the decode writes it
-// as is.
+// decode writes the decoded value of Text into b, without storing it into
+// Str. Each element follows the fence rules: a marker tail continues onto
+// the next element, and every other tail is part of the value.
 func (s *Str) decode(b *strings.Builder) error {
 	if s.Text == nil {
 		b.WriteString(s.Data)
 		return nil
 	}
 	for _, line := range s.Text {
-		// Every element ends in a tail: a newline, or a
-		// backslash. A newline is part of the value.
-		// A backslash stands for an eaten newline, so this
-		// line is part of the next.
+		// Every element ends in a tail: a newline is part of the value;
+		// a backslash stands for an eaten newline, continuing onto the
+		// next element.
 		continued := false
 		if s.Quote == DoubleFenced && oddTrailingBackslashes(line) {
 			line = line[:len(line)-1]
@@ -225,11 +180,8 @@ func (s *Str) decode(b *strings.Builder) error {
 		} else if strings.HasSuffix(line, "\n") {
 			line = strings.TrimSuffix(line, "\n")
 		} else {
-			// Neither tail: this is a recorded one-line
-			// fence, whose lone element is the whole value
-			// with no terminator. The value ends here, short
-			// of a newline. A freshly spelled line always
-			// carries a tail, so only a record reaches here.
+			// Neither tail: the lone element of a recorded one-line
+			// fence, the whole value with no terminator.
 			continued = true
 		}
 		if s.Quote == DoubleFenced {
@@ -247,15 +199,9 @@ func (s *Str) decode(b *strings.Builder) error {
 	return nil
 }
 
-// encode writes s as a block fence at indent, spelling its
-// content fresh for the family resolveQuote picks. The caller
-// has checked that the block form is asked; the inline spelling
-// and the recorded-verbatim path stay with writeStr. When textf
-// is set, it is called with every encoded line as it is written
-// - the content and its own tail, indent stripped, taken from
-// the builder between the prefix and the physical newline that
-// closes a marker line. It returns the family resolveQuote
-// spelled the fence in.
+// encode writes s as a block fence at indent, spelling its content fresh
+// for the family resolveQuote picks. When textf is set, it is called with
+// each encoded line - the content and its tail, indent stripped.
 func (s *Str) encode(b *strings.Builder, indent string, textf func(string)) (QuoteKind, error) {
 	query := resolveQuote(s.Data, s.Quote, true)
 	delim := "'''"
@@ -281,17 +227,16 @@ func (s *Str) encode(b *strings.Builder, indent string, textf func(string)) (Quo
 		case query != DoubleFenced:
 			b.WriteString(line)
 		case line == `"""`:
-			// A content line equal to the delimiter would
-			// close the fence early on re-parse; one quote
-			// escaped keeps it open and decodes back to the
-			// same value.
+			// A content line equal to the delimiter would close the fence
+			// on re-parse; one escaped quote keeps it open and decodes
+			// back to the same value.
 			b.WriteString(`\"""`)
 		default:
 			escapeDoubleFenced(b, line)
 		}
-		// The element's tail: a marker when the value ends
-		// without a newline - only the escaped family can
-		// spell it - else the terminator newline.
+		// The element's tail: a marker when the value ends without a
+		// newline - only the escaped family can spell it - else the
+		// terminator newline.
 		marker := query == DoubleFenced && i == len(lines)-1 && !endsNewline
 		if marker {
 			b.WriteString(`\`)
@@ -301,8 +246,8 @@ func (s *Str) encode(b *strings.Builder, indent string, textf func(string)) (Quo
 		if textf != nil {
 			textf(b.String()[start:b.Len()])
 		}
-		// A marker line still needs a physical newline to
-		// close it; the terminator's newline already is one.
+		// A marker line still needs a physical newline to close it;
+		// the terminator's newline already is one.
 		if marker {
 			b.WriteString("\n")
 		}
@@ -313,19 +258,13 @@ func (s *Str) encode(b *strings.Builder, indent string, textf func(string)) (Quo
 	return query, nil
 }
 
-// writeBlockList writes one block list's items at the given
-// indent. The head and foot comment runs come from the item
-// that opens the block - the same attribution the parse gave
-// it, reversed. The list's own fields pick the form: a
-// Dashed list writes each item as a "- " line when every
-// item sits on one line, and everything else - a fenced
-// dashed list, or a dashed list holding a block item - renders
-// each element's block between --- delimiters instead of
-// guessing.
+// writeBlockList writes one block list's items at the given indent. A
+// Dashed list writes each item as a "- " line when every item sits on one
+// line; anything else renders each element between --- delimiters.
 func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) error {
-	// The dashed form asks every item to sit on one line: a
-	// block item cannot, and the render falls back to the ---
-	// delimited form, which holds any element.
+	// The dashed form asks every item to sit on one line; a block item
+	// cannot, and the render falls back to the --- delimited form, which
+	// holds any element.
 	dashed := l.Dashed
 	if dashed {
 		for _, item := range l.Items {
@@ -340,15 +279,13 @@ func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) 
 		b.WriteString("---\n")
 		for _, item := range l.Items {
 			if len(item.Key) > 0 {
-				// A keyed element in the fence form: the dash
-				// spelling has no fence counterpart, so the
-				// element renders as its own one-pair map.
+				// A keyed element in the fence form renders as its own one-pair
+				// map: the dash spelling has no fence counterpart.
 				if err := writeMap(b, &Map{Items: []*Item{item}, Block: true}, indent, Cmt{}, Cmt{}); err != nil {
 					return err
 				}
 			} else if !isBlock(item.Value) {
-				// A scalar element: the value on the element's
-				// only line, with its trailing comment after it.
+				// A scalar element: the value on the element's only line.
 				b.WriteString(indent)
 				if err := writeValue(b, item.Value); err != nil {
 					return err
@@ -358,10 +295,8 @@ func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) 
 				}
 				b.WriteString("\n")
 			} else if nested, ok := item.Value.(*List); ok && !nested.Dashed {
-				// A nested list fence: the element opens one
-				// indent under the fence, at the distance the
-				// element's own item records. Dashed lists render
-				// at the fence's indent.
+				// A nested list fence opens one indent under the fence;
+				// dashed lists render at the fence's indent.
 				if err := writeBlock(b, item.Value, indent+item.Indent, item.HeadCmt, item.FootCmt); err != nil {
 					return err
 				}
@@ -405,20 +340,10 @@ func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) 
 	return nil
 }
 
-// writeMap writes one map at the given indent, the prefix
-// its pairs sit at: the opening item's Indent for a block
-// value, empty at the top. The map's own Block picks the
-// form: an inline map (Block unset) renders its one-line form.
-// A block map's head and foot comment runs render verbatim:
-// the head before the first item, the foot after the last,
-// each item's pre and post around its line, and the in
-// comment after its value.
-//
-// The blank divider between two non-empty runs is implicit:
-// the parse drops it, and the container re-injects it here,
-// one blank after each non-empty run that a comment follows.
-// A blank stored inside a run - internal, or leading when the
-// run above is empty - renders verbatim.
+// writeMap writes one map at the given indent, inline on one line or in
+// block form with the comment runs around the items. The blank divider
+// between two non-empty runs is implicit - dropped by the parse, and
+// re-injected here, one blank after each run a comment follows.
 func writeMap(b *strings.Builder, m *Map, indent string, head, foot Cmt) error {
 	if !m.Block {
 		b.WriteString("{")
@@ -450,19 +375,11 @@ func writeMap(b *strings.Builder, m *Map, indent string, head, foot Cmt) error {
 		}
 		b.WriteString(":")
 
-		// A value that cannot spell its recorded form in this
-		// position takes the spelling the grammar allows. A
-		// block map or dashed block list with no items has no
-		// block form - the block opens on the lines under the
-		// pair - so it respells as the inline empty container.
-		// A fresh unquoted string with an inner newline opens
-		// as a fence block, one line per line of content,
-		// instead of one escaped line hiding every break. The
-		// trailing newlines do not count - only a break
-		// between content lines does. The parse never records
-		// Unquoted in value position, so this only serves
-		// trees built outside the parse - the JSON decode is
-		// the main one.
+		// A value that cannot spell its recorded form in this position takes the
+		// spelling the grammar allows: an empty block container respells inline
+		// - it has no block form - and a fresh unquoted string with an inner
+		// newline opens as a fence block. The parse never records Unquoted in
+		// value position, so this serves trees built outside the parse.
 		value := item.Value
 		switch n := value.(type) {
 		case *Map:
@@ -486,12 +403,9 @@ func writeMap(b *strings.Builder, m *Map, indent string, head, foot Cmt) error {
 			}
 		}
 
-		// The item's value is written once, in its recorded
-		// form: an inline value on the pair's line with its
-		// trailing comment, a block value opening at the
-		// item's Indent - which holds any value, even one
-		// without newlines, through the trailing backslash
-		// continuation.
+		// The value is written in its recorded form: inline on the pair's
+		// line, or a block opening at the item's Indent - which holds any
+		// value, even one without newlines, through the backslash marker.
 		if !isBlock(value) {
 			b.WriteString(" ")
 			if err := writeValue(b, value); err != nil {
@@ -503,11 +417,8 @@ func writeMap(b *strings.Builder, m *Map, indent string, head, foot Cmt) error {
 			b.WriteString("\n")
 		} else {
 			b.WriteString("\n")
-			// The item opens the block: the block sits at the
-			// item's own indent, one step under the pair. A
-			// synthetic tree records no indent, so the default
-			// step is written: four spaces, the same one the
-			// JSON decode uses for its containers.
+			// The block sits at the item's own indent; a synthetic tree
+			// records none, so the default step - four spaces - is written.
 			step := item.Indent
 			if step == "" {
 				step = "    "
@@ -541,9 +452,8 @@ func writeItemKey(b *strings.Builder, item *Item) error {
 func writeValue(b *strings.Builder, v any) error {
 	switch n := v.(type) {
 	case *Str:
-		// An inline context asks the one-line spellings: a
-		// fence-block record respells to its compact form,
-		// which decodes to the same value.
+		// An inline context asks the one-line spellings: a fence-block
+		// record respells to its compact form.
 		if n.Block {
 			shallow := *n
 			shallow.Block = false
@@ -555,10 +465,9 @@ func writeValue(b *strings.Builder, v any) error {
 	case *Scalar:
 		b.WriteString(n.Text)
 	case *Map:
-		// The map's inline form holds only inline values: an
-		// item claiming a block form inside it is a malformed
-		// AST, and it is rejected rather than silently
-		// normalized.
+		// An item claiming a block form inside an inline map is a malformed
+		// AST, rejected rather than silently normalized. A list holds the
+		// same check.
 		for _, item := range n.Items {
 			if isBlock(item.Value) {
 				return fmt.Errorf("cannot render a block value inside an inline map")
@@ -566,8 +475,6 @@ func writeValue(b *strings.Builder, v any) error {
 		}
 		return writeMap(b, n, "", Cmt{}, Cmt{})
 	case *List:
-		// The list's inline form is the same: only inline
-		// values inside, the same check as the map's.
 		for _, item := range n.Items {
 			if isBlock(item.Value) {
 				return fmt.Errorf("cannot render a block value inside an inline list")
@@ -629,11 +536,8 @@ func isBareWord(s string) bool {
 	return true
 }
 
-// escapeDoubleFenced spells s inside a fence family: the closed
-// escape set over the value, the quote kept raw - the
-// delimiter is three quotes, so a lone quote needs no
-// escape. The final-quote adjacency of the compact close is
-// Quote's off-band tail, not an escape.
+// escapeDoubleFenced spells s inside a fence family: the closed escape
+// set over the value, the quote kept raw - a lone quote needs no escape.
 func escapeDoubleFenced(b *strings.Builder, s string) {
 	for _, r := range s {
 		if r == '"' {
@@ -652,20 +556,10 @@ func escapeDouble(b *strings.Builder, s string) {
 	}
 }
 
-// resolveQuote picks the quote family that spells s in the
-// asked shape: inline (a one-line spelling) or block (a
-// fence block). The Unquoted ask is auto - a bare word is kept
-// bare, anything else falls to the quoted families, double
-// first, single only when the content holds a double quote or
-// a backslash the single family spells raw - and an asked
-// family that cannot hold s escalates to the cheapest one
-// that can. The quoted families are inline-only: ' holds
-// neither a quote nor a newline. A fence's capacity depends on
-// the shape: the compact (inline) raw fence holds no newline,
-// no interior delimiter, and no final quote - the close would
-// swallow it into a typo; the block raw fence holds newlines,
-// but needs a final newline, which the raw family cannot mark
-// away, and no content line equal to its delimiter.
+// resolveQuote picks the quote family that spells s in the asked shape,
+// inline or block, escalating an ask that cannot hold s to the cheapest
+// family that can. The quoted families are inline-only, the compact raw
+// fence holds no newline, and the block raw fence needs a final one.
 func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 	switch q {
 	case Unquoted:
@@ -674,8 +568,8 @@ func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 		}
 		q = DoubleQuoted
 		if strings.ContainsRune(s, '"') || strings.ContainsRune(s, '\\') {
-			// The single family spells both raw, the cleaner
-			// spelling - when it holds the rest of the content.
+			// The single family spells both raw, the cleaner spelling -
+			// when it holds the rest of the content.
 			q = SingleQuoted
 			if strings.ContainsRune(s, '\'') || strings.ContainsRune(s, '\n') {
 				q = DoubleQuoted
@@ -688,18 +582,18 @@ func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 	case DoubleQuoted:
 	case SingleFenced:
 		if !block {
-			// The compact raw family holds neither a newline, an
-			// interior delimiter, nor a final quote - the close
-			// would swallow it into a four-quote typo.
+			// The compact raw family holds no newline, no interior
+			// delimiter, and no final quote - the close would swallow
+			// it into a four-quote typo.
 			if strings.Contains(s, "'''") || strings.ContainsRune(s, '\n') ||
 				strings.HasSuffix(s, "'") {
 				q = DoubleFenced
 			}
 			break
 		}
-		// The block raw family holds newlines but cannot mark a
-		// missing final one, and a content line equal to the
-		// delimiter would close the fence early.
+		// The block raw family holds newlines but cannot mark a missing
+		// final one, and a content line equal to the delimiter would
+		// close the fence early.
 		if !strings.HasSuffix(s, "\n") {
 			q = DoubleFenced
 			break
@@ -715,22 +609,14 @@ func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 	return q
 }
 
-// quoteString writes one string spelled in the asked family,
-// never failing: resolveQuote escalates any ask that cannot
-// hold the string to the cheapest family that can. The force
-// flag carries the position: true in value position, where a
-// bare word is never read back and the bare spelling is
-// skipped; false in key position, where a bare word recorded
-// bare stays bare. The compact escaped fence keeps the quote
-// raw, and a final bare quote escapes - the off-band tail of
-// the compact close.
+// quoteString writes one string in the asked family, never failing:
+// resolveQuote escalates any ask that cannot hold it. force is value
+// position: a bare word is never read back, so its spelling is skipped.
 func quoteString(b *strings.Builder, s string, q QuoteKind, force bool) {
 	q = resolveQuote(s, q, false)
 	if force && q == Unquoted {
-		// Value position: the ladder kept the word bare, a
-		// spelling the grammar never reads back there. Double
-		// first, single under the escape-worthy rule, the same
-		// choice the ladder makes for a non-bare word.
+		// Value position: the ladder kept the word bare, a spelling the
+		// grammar never reads back there.
 		q = DoubleQuoted
 		if strings.ContainsRune(s, '"') || strings.ContainsRune(s, '\\') {
 			q = SingleQuoted
@@ -755,11 +641,8 @@ func quoteString(b *strings.Builder, s string, q QuoteKind, force bool) {
 		b.WriteString(s)
 		b.WriteString("'''")
 	case DoubleFenced:
-		// The compact escaped family keeps the quote raw, but
-		// a final raw quote would run into the closing
-		// delimiter and the parser would read a typo, so the
-		// final quote is escaped - the off-band tail of the
-		// compact close.
+		// A final raw quote would run into the closing delimiter, so it
+		// is escaped - the off-band tail of the compact close.
 		body, tail := s, ""
 		if strings.HasSuffix(s, `"`) {
 			body, tail = s[:len(s)-1], `\"`

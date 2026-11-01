@@ -15,21 +15,11 @@
 
 package cnfast
 
-// The expansion tracking: no map key is expanded more than
-// once, and no key is both used as a map and defined as a
-// non-map. The spec's paths are the one exemption - a path
-// traverses the maps along its prefix, so the same map may be
-// referred to any number of times, but each item's final
-// segment performs one expansion, and a second item ending
-// its path on the same key expands it twice.
-//
-// The check runs once over the built AST, a walk with a
-// tracking trie: one level per map scope, a trackedKey the
-// history of one key at that scope. A level is looked at only
-// while its map's items are walked; the one thing crossing
-// scopes is the next level down, which an expansion shares
-// with the map it holds, so a later path converging on the
-// same scope reads the history the descent wrote.
+// The expansion tracking: no map key is expanded twice, and no key is
+// defined both as a map and as a non-map - paths traversing their prefix
+// are the one exemption. The check walks the built AST with a trie, one
+// level per map scope; a level is shared by the map it expands, so
+// later converging paths read the history the descent wrote.
 
 // A trackedKey is the history of one key at one map scope.
 type trackedKey struct {
@@ -41,11 +31,9 @@ type trackedKey struct {
 // A trackedMap is one scope of tracked keys.
 type trackedMap map[string]trackedKey
 
-// checkConflicts validates the expansion rule over one parsed
-// tree: the item lists may not expand any key twice, and no
-// key may be defined both as a map and as a non-map. The
-// double non-map definition stays legal here - the merge
-// layer owns that conflict.
+// checkConflicts validates the expansion rule over one parsed tree.
+// The double non-map definition stays legal - the merge layer owns
+// that conflict.
 func checkConflicts(root *Item) error {
 	switch v := root.Value.(type) {
 	case *Map:
@@ -56,10 +44,8 @@ func checkConflicts(root *Item) error {
 	return nil
 }
 
-// checkListConflicts walks the map scopes inside list elements.
-// Paths cannot cross into a list, so every element map starts
-// a fresh scope: two elements may expand the same key
-// without ever meeting.
+// checkListConflicts walks the map scopes inside list elements. Paths
+// cannot cross into a list, so every element map starts a fresh scope.
 func checkListConflicts(l *List) error {
 	for _, elem := range l.Items {
 		switch v := elem.Value.(type) {
@@ -76,10 +62,9 @@ func checkListConflicts(l *List) error {
 	return nil
 }
 
-// checkMapConflicts checks one map's item list against one scope
-// of the trie, and descends into every item's value. Document
-// order decides: the first item's definition stands, the one
-// that contradicts it takes the error, named at its own key.
+// checkMapConflicts checks one map's item list against one scope of the
+// trie, and descends into every item's value. Document order decides: the
+// first definition stands, the one contradicting it takes the error.
 func checkMapConflicts(m *Map, lastValues trackedMap) error {
 	for _, item := range m.Items {
 		if sub, ok := item.Value.(*Map); ok {
@@ -87,16 +72,16 @@ func checkMapConflicts(m *Map, lastValues trackedMap) error {
 			if err != nil {
 				return err
 			}
-			// The expansion's own map shares the level the tip
-			// recorded: items inside it and later paths
-			// converging on the same scope see one history.
+			// The expansion's own map shares the level the tip recorded:
+			// items inside it and later paths converging there see one
+			// history.
 			if err := checkMapConflicts(sub, nextValues); err != nil {
 				return err
 			}
 			continue
 		}
-		// A non-map tip - scalar or list - is a definition the
-		// tracking must see; a list walks its elements after.
+		// A non-map tip is a definition the tracking must see;
+		// a list walks its elements after.
 		if _, err := trackKey(lastValues, item.Key, true); err != nil {
 			return err
 		}
@@ -109,15 +94,10 @@ func checkMapConflicts(m *Map, lastValues trackedMap) error {
 	return nil
 }
 
-// trackKey walks one item's key path through the tracking
-// trie, conflict telling whether the item defines a non-map.
-// A non-tip segment is never an error - take the trackedKey
-// at the current level, adding it if missing, a pass-through
-// node - and continue from its level. The tip decides on what
-// the item brings against the key's recorded history: a map
-// against a prior expansion expanded twice, and a second
-// definition of any kind - the key was already defined, as a
-// map or as a non-map - a redefinition of the previous key.
+// trackKey walks one item's key path through the trie, conflict telling
+// whether the item defines a non-map. Non-tip segments are never errors;
+// at the tip, a map over a prior expansion, or any second definition,
+// is a redefinition.
 func trackKey(lastValues trackedMap, key []*Str, conflict bool) (trackedMap, error) {
 	nextKey, seen := lastValues[key[0].Data]
 	if !seen {

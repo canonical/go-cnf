@@ -25,9 +25,7 @@ import (
 )
 
 // A line is one physical line of the document, split into its
-// indentation prefix and its content. The raw field is the
-// whole line - indent and content - a slice of the parsed
-// text, so comment runs can take it without rejoining.
+// indentation prefix and its content.
 type line struct {
 	num    int    // 1-based line number, for errors
 	indent string // the literal prefix, spaces or tabs
@@ -67,13 +65,8 @@ func errAt(pos Pos, msg string) error {
 	return fmt.Errorf("%d:%d: %s", pos.L, pos.C, msg)
 }
 
-// errAtScan wraps a scan error at the source position where
-// the scanned text begins: the true position of the offender
-// is pos advanced over the scanned text the error's offset
-// names - text[:scanErr.offset] as a delta, the offset
-// clamped to the text before the runes are counted. Text the
-// scan crossed may hold newlines: each one advances the line
-// and resets the column to the index past it.
+// errAtScan wraps a scan error at the source position where the
+// scanned text begins, advanced over the text the offset names.
 func errAtScan(pos Pos, text string, scanErr error) error {
 	serr, ok := scanErr.(scanError)
 	if !ok {
@@ -101,8 +94,6 @@ func indentPos(ln line) Pos {
 
 // quoteShort quotes a short prefix of s for an error message:
 // up to five runes as they stand, then "..." when more follow.
-// A long offender keeps the message readable while still
-// showing what it started with.
 func quoteShort(s string) string {
 	const cut = 5
 	for i, _ := range s {
@@ -114,11 +105,8 @@ func quoteShort(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// keyPath spells one key path for an error message: dot-
-// joined segments inside backquotes, each in its recorded
-// quote style - the same form cnfpretty's path writer
-// produces, so a path never blends into the phrase around
-// it. `a` and `a."b"` are how the forms look.
+// keyPath spells one key path for an error message: dot-joined
+// segments inside backquotes, each in its recorded quote style.
 func keyPath(key []*Str) string {
 	var b strings.Builder
 	b.WriteString("`")
@@ -154,10 +142,7 @@ func Parse(data []byte, opts *ParseOptions) (*Item, error) {
 }
 
 // invalidUTF8Err locates the first invalid byte in data and
-// names its line and column, both 1-based, counted in runes
-// within the line. A cnf document is UTF-8 text; any other
-// byte sequence is a decode error before the grammar is
-// consulted.
+// names its line and column, both 1-based, in runes.
 func invalidUTF8Err(data []byte) error {
 	line, col, off := 1, 1, 0
 	for i := 0; i < len(data); {
@@ -178,12 +163,7 @@ func invalidUTF8Err(data []byte) error {
 }
 
 // parseTop reads the file's one value, always wrapped in a
-// keyless root Item. The item's slots hold the comment runs
-// around the value, its Indent is the prefix of the block
-// the value opens, and the value records how it is written.
-// The opening comment run must sit at the top prefix - a
-// deeper comment matches no enclosing block - and no
-// structural line may follow the value.
+// keyless root Item. No structural line may follow the value.
 func (p *parser) parseTop() (*Item, error) {
 	first, ok := p.peekStruct("")
 	if err := cmtIndentOK(p.pending, ""); err != nil {
@@ -191,9 +171,7 @@ func (p *parser) parseTop() (*Item, error) {
 	}
 	item := &Item{}
 	if !ok {
-		// An empty file is an empty map, written as a block. The
-		// pending run is the map's head: the root item has no
-		// line of its own for it to precede.
+		// An empty file is an empty map, written as a block.
 		item.Value = &Map{Items: []*Item{}, Block: true}
 		item.HeadCmt = cmtOf(p.pending)
 		p.pending = nil
@@ -201,51 +179,26 @@ func (p *parser) parseTop() (*Item, error) {
 	}
 	var err error
 	if looksLikeItem(first.text) {
-		// A pair-shaped line opens a map, written as a block.
-		// The pending run stays: parseMap's cmtSplitPre divides
-		// it between the map's head and the first pair's pre
-		// at the run's last blank.
+		// A pair-shaped line opens a map; parseMap divides the
+		// pending run between the map's head and the first pre.
 		item.Value, err = p.parseMap(item, "")
 		if err != nil {
 			return nil, err
 		}
 		item.Value.(*Map).Block = true
 	} else {
-		// The value opens on its own line - a fence, a list
-		// fence, an inline value - and the pending run
-		// precedes that line: the item's pre.
+		// Any other value opens on its own line at column zero.
 		item.PreCmt = cmtOf(p.pending)
 		p.pending = nil
-		// The grammar puts the file's value outside any
-		// INDENT: it sits at column zero, and a line deeper
-		// than that has no form to parse as.
 		if first.indent != "" {
 			return nil, errAt(indentPos(first), "cannot indent a top-level value")
 		}
-		switch {
-		case first.text == `"""` || first.text == `'''`:
-			item.Value, err = p.parseFence(first, first.text)
-		case first.text == "---":
-			item.Value, err = p.parseListFence(first)
-		case isListItem(first.text):
-			item.Value, err = p.parseBlockList(item, first.indent)
-		default:
-			// An inline value on the first line, which must end
-			// the file.
-			p.pos++ // consume the value's own line
-			var in Cmt
-			item.Value, in, err = p.parseInline(first, first.text)
-			item.InCmt = in
-		}
+		item.Value, err = p.parseValue(item, first)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if ln, more := p.peekStruct(""); more {
-		// The stray structural line at its own start: the
-		// content that comes after the top-level value. The
-		// message quotes a short prefix of it, so the error
-		// shows what the content was.
 		return nil, errAt(indentPos(ln), "cannot parse content after top-level value: "+quoteShort(ln.text))
 	}
 	item.PostCmt = cmtOf(p.pending)
@@ -253,11 +206,8 @@ func (p *parser) parseTop() (*Item, error) {
 	return item, nil
 }
 
-// looksLikeItem reports whether text appears to be a
-// "path: value" line - a structural check only; the path may
-// still be invalid, but parseMap will surface the proper
-// error from scanKeyPath, naming the path, not the value that
-// follows it.
+// looksLikeItem is a cheap check for a "path: value" line;
+// the real scan names the path, not the value, on a bad line.
 func looksLikeItem(text string) bool {
 	i := strings.IndexByte(text, ':')
 	if i <= 0 {
@@ -267,23 +217,9 @@ func looksLikeItem(text string) bool {
 	return c == '"' || c == '\'' || c == '.' || isBareRune(rune(c))
 }
 
-// parseMap reads the pairs of one map at the exact prefix,
-// storing them in the map it builds for the item that opens
-// the block. The comment lines around them are collected as
-// they are skipped, and attributed when the next structural
-// line arrives: a run splits at its first blank - the
-// comments before it are the previous item's post - and the
-// blank onward travels to the next candidate. Without a
-// blank the whole run travels forward: the tie-break rule.
-// The first item's pre divides from the block's head at the
-// run's last blank.
-//
-// Comments follow the same indent rule as pairs: a
-// standalone comment sits at the prefix of the block it
-// belongs to. A shallower comment closes the block -
-// peekStruct returns it unconsumed, and the parent collects
-// it - and a deeper one is an error unless the structural
-// line lands on its exact prefix.
+// parseMap reads one block map's pairs at the exact prefix. A run splits
+// at its first blank; without one it travels forward whole. A shallower
+// comment closes the block; a deeper one errors unless the pair is on it.
 func (p *parser) parseMap(item *Item, parentIndent string) (*Map, error) {
 	m := &Map{Items: []*Item{}} // an empty map keeps its items [], never null
 	for {
@@ -296,8 +232,8 @@ func (p *parser) parseMap(item *Item, parentIndent string) (*Map, error) {
 		}
 		if ln.indent != parentIndent {
 			if len(ln.indent) > len(parentIndent) {
-				// The deeper line's own start: the pair that
-				// misses the block's prefix is named there.
+				// The pair that misses the block's prefix is named at
+				// the deeper line's own start.
 				return nil, errAt(indentPos(ln), "cannot mix indentation prefixes")
 			}
 			// A shallower line - structural or comment - closes the
@@ -324,20 +260,9 @@ func (p *parser) parseMap(item *Item, parentIndent string) (*Map, error) {
 	}
 }
 
-// cmtSplitPre resolves the pending run at an item line of the
-// block, returning the item's pre. The run is validated first:
-// every comment must sit at the block's exact prefix - the
-// head may have been collected by the parent before this
-// block's prefix was known, so the check lands here. The
-// previous item's post stops at the run's first blank; the
-// blank onward is the pre. The first item's pre divides from
-// the block's head at the last blank: the head stops right
-// before the blank adjacent to the item's pre run.
-//
-// The blank divider between two non-empty runs is implicit:
-// dropped here, re-added by the render. When the run above is
-// empty - a structural line - the blank stays stored: the
-// render cannot tell a divided run from a hugging one.
+// cmtSplitPre resolves the pending run at an item line of the block,
+// returning the item's pre: the previous post stops at the first blank,
+// the first pre divides from the head at the last.
 func (p *parser) cmtSplitPre(owner *Item, items []*Item, parent string) (Cmt, error) {
 	run := p.pending
 	p.pending = nil
@@ -367,14 +292,9 @@ func (p *parser) cmtSplitPre(owner *Item, items []*Item, parent string) (Cmt, er
 	return cmtOf(run), nil // tie-break: no blank, all forward
 }
 
-// cmtAssignPost resolves the pending run at the block's
-// close, validated first against the block's exact prefix.
-// The comments before the first blank are the last item's
-// post, and the blank onward is the block's foot. Without a
-// blank the whole run hugs the last item - the line for an
-// inline value, the block close for a block value - and is
-// its post: the attribution does not depend on what follows
-// the block.
+// cmtAssignPost resolves the pending run at the block's close: the run
+// before the first blank is the last item's post, the blank onward the
+// block's foot. Without a blank the run hugs the last item.
 func (p *parser) cmtAssignPost(owner *Item, items []*Item, parent string) error {
 	run := p.pending
 	p.pending = nil
@@ -390,10 +310,8 @@ func (p *parser) cmtAssignPost(owner *Item, items []*Item, parent string) error 
 	}
 	last := items[len(items)-1]
 	if inner, ok := last.Value.(*Map); ok && endsBlank(last, inner) {
-		// The item's block map ended on a blank - the divider
-		// its own close consumed into its foot - which sets
-		// this run off from the item: none of it can be the
-		// item's post, and all of it is the block's foot.
+		// The item's block map ended on a blank: the run cannot
+		// be its post, and is the block's foot.
 		owner.FootCmt = cmtOf(run)
 		return nil
 	}
@@ -401,34 +319,26 @@ func (p *parser) cmtAssignPost(owner *Item, items []*Item, parent string) error 
 		last.PostCmt = cmtOf(run[:i])
 		foot := run[i:]
 		if !hasComment(foot) {
-			// The foot holds only blanks: it is not a run of the
-			// block but the divider that sets the content after
-			// it off from the block. It travels: the parent
-			// collects it as the leading blank of its own next
-			// run.
+			// Blanks only: the divider, not a run - the parent collects
+			// it as the leading blank of its own next run.
 			p.pending = foot
 			return nil
 		}
 		if i > 0 {
-			// The post is non-empty: the blank at i is the
-			// divider between the two runs, implicit.
+			// The blank at i divides the two runs.
 			owner.FootCmt = cmtOf(run[i+1:])
 			return nil
 		}
 		owner.FootCmt = cmtOf(foot)
 		return nil
 	}
-	// Tie-break: no blank, the run hugs the item - the line
-	// for an inline value, the block close for a block value
-	// - and belongs to it. The block's foot only receives
-	// runs set off by blanks, so the attribution does not
-	// depend on what follows the block.
+	// Tie-break: no blank, the run hugs the last item.
 	last.PostCmt = cmtOf(run)
 	return nil
 }
 
-// hasComment reports whether the run holds at least one comment
-// line, as opposed to only blanks.
+// hasComment reports whether the run holds at least one
+// comment line, as opposed to only blanks.
 func hasComment(run []line) bool {
 	for _, ln := range run {
 		if ln.text != "" {
@@ -439,10 +349,7 @@ func hasComment(run []line) bool {
 }
 
 // endsBlank reports whether the item's block map ends with a
-// blank line: the foot's last line for a map with pairs, the
-// head's last for an empty one - its only run. A blank there
-// divides the block from whatever follows it, so the run the
-// containing map collects next cannot be the item's post.
+// blank line, which divides the block from what follows it.
 func endsBlank(item *Item, m *Map) bool {
 	tail := item.FootCmt.Text
 	if len(tail) == 0 && len(m.Items) == 0 {
@@ -451,10 +358,8 @@ func endsBlank(item *Item, m *Map) bool {
 	return len(tail) > 0 && tail[len(tail)-1] == ""
 }
 
-// cmtIndentOK reports an error when a comment line in the run
-// does not sit at the given prefix. The offending comment's
-// position names it where it stands: the column its prefix
-// begins at.
+// cmtIndentOK reports an error when a comment line in the
+// run does not sit at the given prefix.
 func cmtIndentOK(run []line, parent string) error {
 	for _, ln := range run {
 		if ln.text != "" && ln.indent != parent {
@@ -465,10 +370,8 @@ func cmtIndentOK(run []line, parent string) error {
 }
 
 // cmtOf builds one comment run from its lines: one element
-// per line, holding the content after the indent - a comment
-// sits at the block's indent, so carrying it again is
-// redundant; the render re-adds it. A blank line is the empty
-// string. The position of the run is its first line.
+// per line, the content after the indent - the render re-adds
+// the indent. A blank line is the empty string.
 func cmtOf(run []line) Cmt {
 	if len(run) == 0 {
 		return Cmt{}
@@ -499,12 +402,9 @@ func lastBlank(run []line) int {
 	return last
 }
 
-// peekStruct returns the next structural line, collecting the
-// blank and comment lines it skips into the pending run. A
-// comment shallower than the block's prefix closes the block:
-// it is returned as the boundary line, unconsumed, and the
-// parent's peekStruct collects it. Blanks never close a block
-// - they belong to the innermost open one.
+// peekStruct returns the next structural line, collecting the blank and
+// comment lines it skips into the pending run. A shallower comment closes
+// the block, returned unconsumed; blanks never close one.
 func (p *parser) peekStruct(prefix string) (line, bool) {
 	for p.pos < len(p.lines) {
 		ln := p.lines[p.pos]
@@ -526,28 +426,17 @@ func (p *parser) peekStruct(prefix string) (line, bool) {
 	return line{}, false
 }
 
-// parseItem splits one "path: value" line into its AST item.
-// Positions are 1-based: the line's content starts at column
-// len(indent)+1, so a token at offset i in text sits at column
-// len(indent)+1+i.
-//
-// A block value opened by the lines that follow records the
-// distance on the item itself: the content under the pair
-// sits at the pair's prefix plus the item's Indent. An
-// inline value carries no indent - an empty one adds
-// nothing until a reformat hands one down.
+// parseItem splits one "path: value" line. A token at offset i in the
+// line's text sits at column len(indent)+1+i. A block opened by the lines
+// that follow records its distance on the item's Indent.
 func (p *parser) parseItem(ln line) (*Item, error) {
 	base := len(ln.indent) + 1
 	path, after, err := scanKeyPath(ln.text)
 	if err != nil {
-		// The scan started at the line's first text column;
-		// the scan error's offset lands on the offender.
 		return nil, errAtScan(Pos{L: ln.num, C: base}, ln.text, err)
 	}
 	if after == "" || after[0] != ':' {
-		// The separator must sit where the scan stopped: the
-		// remainder's first column, the honest spot for what
-		// refuses to be one.
+		// The separator must sit where the scan stopped.
 		return nil, errAt(Pos{L: ln.num, C: base + len(ln.text) - len(after)}, "cannot find key-value separator `:`")
 	}
 	for i := range path {
@@ -563,28 +452,21 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 	if text == "" {
 		next, ok := p.peekStruct(ln.indent)
 		if !ok || len(next.indent) <= len(ln.indent) {
-			// No value on the line and no deeper block under
-			// it: the error names the key line at its own
-			// start, and spells the key it holds.
 			return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
 		}
 		// The block's shape is decided by its first line: a
 		// "- " item opens a list, a fence delimiter a fence,
-		// a --- line a list fence, anything else a map. The
-		// value records the form.
+		// a --- line a list fence, anything else a map.
 		switch {
 		case isListItem(next.text):
 			item.Value, err = p.parseBlockList(item, next.indent)
-		case next.text == `"""` || next.text == `'''`:
+		case isStringFence(next.text) || next.text == "---":
+			// Nothing may sit between the pair and its fence;
+			// parseValue routes the two fence forms.
 			if err := p.cmtNoFencePrefix(); err != nil {
 				return nil, err
 			}
-			item.Value, err = p.parseFence(next, next.text)
-		case next.text == "---":
-			if err := p.cmtNoFencePrefix(); err != nil {
-				return nil, err
-			}
-			item.Value, err = p.parseListFence(next)
+			item.Value, err = p.parseValue(item, next)
 		default:
 			item.Value, err = p.parseMap(item, next.indent)
 			if err != nil {
@@ -595,8 +477,8 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 		if err != nil {
 			return nil, err
 		}
-		// The block opens under the pair: the item records
-		// the distance, the pair's own and no sibling's.
+		// The block opens under the pair: the item records the
+		// distance, the pair's own and no sibling's.
 		item.Indent = next.indent[len(ln.indent):]
 		return item, nil
 	}
@@ -608,21 +490,47 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 	return item, nil
 }
 
-// isListItem reports whether a line's text opens a block
-// list item: a "-" followed by a blank or the end of the text.
-// A bare "-" with nothing after still opens a list and the item
-// itself is then an error, named at the item.
+// isListItem reports whether a line's text opens a block list item:
+// a "-" followed by a blank or the end of the text.
 func isListItem(text string) bool {
 	return text == "-" || strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "-\t")
 }
 
-// parseBlockList reads the "- item" lines of one block list at
-// the exact prefix. Each item is an Item - the grammar's
-// inlinepair - with the key present when the item line carries
-// a path, absent for a bare inline value. The comment runs
-// around them attribute exactly as a block map's: the owning
-// item carries the block's head and foot, each item its pre
-// and post - the same helpers, the same rules.
+// isStringFence reports whether text is a fence delimiter.
+func isStringFence(text string) bool {
+	return text == `"""` || text == `'''`
+}
+
+// parseValue reads the value opening at first, a peeked line: a fence,
+// a list fence, a dashed list, a pair-shaped block map, or an inline
+// value. The block under a pair is parseItem's, its map default its own.
+func (p *parser) parseValue(owner *Item, first line) (Value, error) {
+	switch {
+	case isStringFence(first.text):
+		return p.parseFence(first, first.text)
+	case first.text == "---":
+		return p.parseListFence(first)
+	case isListItem(first.text):
+		return p.parseBlockList(owner, first.indent)
+	case looksLikeItem(first.text):
+		v, err := p.parseMap(owner, first.indent)
+		if err != nil {
+			return nil, err
+		}
+		v.Block = true
+		return v, nil
+	default:
+		// An inline value on its only line.
+		p.pos++ // consume the value's own line
+		v, in, err := p.parseInline(first, first.text)
+		owner.InCmt = in
+		return v, err
+	}
+}
+
+// parseBlockList reads the "- item" lines of one block list
+// at the exact prefix. Each item is the grammar's inlinepair:
+// a key when the item line carries a path, absent otherwise.
 func (p *parser) parseBlockList(owner *Item, prefix string) (*List, error) {
 	items := []*Item{}
 	pos := Pos{}
@@ -647,8 +555,7 @@ func (p *parser) parseBlockList(owner *Item, prefix string) (*List, error) {
 		p.pos++
 		text := strings.TrimLeft(ln.text[1:], " \t")
 		if text == "" {
-			// A dash with nothing after it: no key to spell, the
-			// item line's own start carries the error.
+			// A dash with nothing after it.
 			return nil, errAt(indentPos(ln), "cannot omit the value")
 		}
 		item := &Item{}
@@ -664,9 +571,8 @@ func (p *parser) parseBlockList(owner *Item, prefix string) (*List, error) {
 			item.Key = path
 			text = strings.TrimLeft(after[1:], " \t")
 			if text == "" {
-				// The inlinepair form ends on its colon: the key is
-				// spelled, the item line's own start carries the
-				// error - the same message parseItem raises.
+				// The inlinepair form ends on its colon: the same
+				// omission parseItem raises.
 				return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
 			}
 		}
@@ -680,15 +586,9 @@ func (p *parser) parseBlockList(owner *Item, prefix string) (*List, error) {
 	}
 }
 
-// parseFence reads one fence block - the grammar's
-// sfenceblock or dfenceblock - from its opening line, already
-// peeked as next. The content is the raw lines between the
-// delimiters at the fence's prefix: the closing delimiter
-// closes only at the exact prefix, a shallower non-blank line
-// is an error, a shallower blank contributes the newline
-// only, and deeper lines' excess indent is content. The
-// escaped family processes escapes, with a trailing backslash
-// continuing the line.
+// parseFence reads one fence block from its opening line, already peeked
+// as next. The close lands only at the exact prefix; a shallower blank
+// is the newline only; deeper lines' excess indent is content.
 func (p *parser) parseFence(next line, delim string) (Value, error) {
 	prefix := next.indent
 	p.pos++ // consume the opening delimiter
@@ -697,6 +597,7 @@ func (p *parser) parseFence(next line, delim string) (Value, error) {
 		quote = DoubleFenced
 	}
 	s := &Str{Quote: quote, Block: true, Pos: Pos{L: next.num, C: len(prefix) + 1}}
+	escaped := delim == `"""`
 	indentChar := byte(' ')
 	if len(prefix) > 0 {
 		indentChar = prefix[0]
@@ -720,21 +621,17 @@ func (p *parser) parseFence(next line, delim string) (Value, error) {
 		}
 		if len(ln.indent) < len(prefix) {
 			if ln.text != "" {
-				// A non-empty line at a shallower prefix is a
-				// syntax error: the fence closes only at its
-				// own exact prefix.
+				// Only the exact prefix closes the fence.
 				return nil, errAt(indentPos(ln), "cannot close fence at shallower prefix")
 			}
-			// A blank line with a valid but shallower prefix:
-			// the line contributes the newline only.
+			// A shallower blank contributes the newline only.
 			b.WriteString("\n")
 			text = append(text, "\n")
 			continue
 		}
 		if ln.text == "" {
-			// A blank line at or deeper than the fence prefix:
-			// its whitespace is content, recorded with its
-			// terminator.
+			// A blank at or deeper than the fence prefix: its
+			// whitespace is content.
 			b.WriteString(ln.indent[len(prefix):])
 			b.WriteString("\n")
 			text = append(text, ln.indent[len(prefix):]+"\n")
@@ -748,22 +645,16 @@ func (p *parser) parseFence(next line, delim string) (Value, error) {
 		content := ln.indent[len(prefix):] + ln.text
 		contentPos := Pos{L: ln.num, C: len(prefix) + 1}
 		continued = false
-		if quote == DoubleFenced && oddTrailingBackslashes(content) {
+		if escaped && oddTrailingBackslashes(content) {
 			content = content[:len(content)-1]
 			continued = true
 		}
 		// The recorded element keeps the source's own tail: the
-		// terminator when the line stands complete, the
-		// continuation marker when the escape ate the newline.
-		// The decode reconstructs the value from the elements
-		// alone.
+		// terminator, or the continuation marker.
 		encoded := content
-		if quote == DoubleFenced {
+		if escaped {
 			unq, err := unescape(content)
 			if err != nil {
-				// The content starts at the fence prefix's column;
-				// the escape error names the backslash's column,
-				// advanced over the content.
 				return nil, errAtScan(contentPos, content, err)
 			}
 			content = unq
@@ -803,10 +694,8 @@ func oddTrailingBackslashes(s string) bool {
 	return n%2 == 1
 }
 
-// unescape processes the closed escape set over raw text.
-// Its errors carry the backslash's offset within s, so a
-// caller holding the source position can name the exact
-// column where the escape starts.
+// unescape processes the closed escape set over raw text. Its errors
+// carry the backslash's offset within s, to name the exact column.
 func unescape(s string) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -828,16 +717,9 @@ func unescape(s string) (string, error) {
 	return b.String(), nil
 }
 
-// parseListFence reads one --- delimited list - the grammar's
-// listfence - from its opening line, already peeked as next.
-// Each element is the lines between two --- delimiters at the
-// fence's exact prefix, parsed as a block value: a map, a
-// list, or a fence. The element's lines are slices of the
-// same line structs, so positions inside record the true file
-// lines. A nested list fence opens at a deeper prefix than
-// the enclosing fence's delimiters: a --- at the fence's own
-// prefix is a delimiter, never content, so the nesting is
-// unambiguous.
+// parseListFence reads one --- delimited list from its opening line,
+// already peeked as next. Each element is the lines between two ---
+// delimiters at the fence's exact prefix, parsed as a block value.
 func (p *parser) parseListFence(next line) (Value, error) {
 	prefix := next.indent
 	p.pos++ // consume the opening ---
@@ -861,21 +743,17 @@ func (p *parser) parseListFence(next line) (Value, error) {
 		}
 		elem := p.lines[start:p.pos]
 		if len(elem) == 0 {
-			// The empty element opens at the delimiter that closed
-			// the previous one - or, for the first element, the
-			// fence's own opening line. The error names that line at
-			// its own position: the --- after its indent.
+			// The error names the delimiter that opened the
+			// element: the previous element's close, or the
+			// fence's own opening line.
 			open := next
 			if start > 0 {
 				open = p.lines[start-1]
 			}
 			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
-		// The indented elements - nested fences - must share one
-		// indent: the first one's opening --- sets it, and a later
-		// element at a different indent mixes indents inside the
-		// fence. Flat elements sit at the fence's own prefix and
-		// do not participate.
+		// Nested fences must share one indent: the first one's opening
+		// --- sets it.
 		if elem[0].text == "---" && len(elem[0].indent) > len(prefix) {
 			if nested == "" {
 				nested = elem[0].indent
@@ -885,11 +763,8 @@ func (p *parser) parseListFence(next line) (Value, error) {
 		}
 		p.pos++
 		sub := &parser{lines: elem}
-		// The element may open with comment and blank lines:
-		// they collect into the sub-parser's pending run - the
-		// map parser divides them between the block's head and
-		// the first pair's pre - and the dispatch reads the
-		// first structural line.
+		// The element may open with comment and blank lines; the
+		// sub-parser's peek collects them into its pending run.
 		first, ok := sub.peekStruct(prefix)
 		if !ok {
 			open := next
@@ -900,12 +775,8 @@ func (p *parser) parseListFence(next line) (Value, error) {
 		}
 		eitem := &Item{}
 		if nested != "" {
-			// The element's content opens under it: a nested
-			// fence sits one indent deeper than the fence's
-			// own delimiters, the distance the element item
-			// records. A flat element's content sits at the
-			// fence base - the element's own base - so it
-			// adds nothing.
+			// A nested fence sits one indent deeper than the
+			// fence's delimiters; a flat element adds nothing.
 			eitem.Indent = nested[len(prefix):]
 		}
 		val, err := sub.parseListFenceValue(eitem, first, prefix)
@@ -919,14 +790,9 @@ func (p *parser) parseListFence(next line) (Value, error) {
 		}
 		eitem.Value = val
 		l.Items = append(l.Items, eitem)
-		// The terminator consumed above ends this element; the
-		// fence continues when the next structural line sits at
-		// the fence's prefix - the next element's first line -
-		// or deeper: a nested list fence element opens at a
-		// deeper prefix. A shallower line closes the fence; it
-		// stays in the stream for the parent. A doubled ---
-		// would leave the next element empty, caught by the
-		// empty-element check above.
+		// The fence continues while the next structural line sits
+		// at its prefix or deeper; a shallower line closes it
+		// and stays in the stream for the parent.
 		ln, ok := p.peekStruct(prefix)
 		if !ok || len(ln.indent) < len(prefix) {
 			return l, nil
@@ -935,67 +801,25 @@ func (p *parser) parseListFence(next line) (Value, error) {
 }
 
 // parseListFenceValue reads one element of a list fence from
-// its first line, already peeked. The element is the
-// grammar's inline or fenceblock: an inline value - scalar,
-// map, or list - on its own line, or a block - a dashed list,
-// a map, a fence, or a nested list fence. The first line is
-// still in the stream: the sub-parsers consume it through
-// their own peek loops. The item receives the block's
-// boundary comments when the value is a map. The fence's
-// prefix delimits the element: a deeper line opens a nested
-// block only as a list fence - a dashed list, a map, or an
-// inline item cannot sit deeper than the fence's delimiters.
+// its first line, already peeked: a value at the fence's
+// prefix, or a nested list fence one indent deeper.
 func (p *parser) parseListFenceValue(item *Item, first line, fence string) (Value, error) {
-	switch {
-	case first.indent == fence:
-		// The element sits at the fence's own prefix: a dashed
-		// list, a map, a fence, or an inline value.
-		switch {
-		case isListItem(first.text):
-			v, err := p.parseBlockList(item, first.indent)
-			if err != nil {
-				return nil, err
-			}
-			return v, nil
-		case first.text == `"""` || first.text == `'''`:
-			return p.parseFence(first, first.text)
-		case looksLikeItem(first.text):
-			v, err := p.parseMap(item, first.indent)
-			if err != nil {
-				return nil, err
-			}
-			v.Block = true
-			return v, nil
-		default:
-			// An inline value on the element's only line - a
-			// scalar, a quoted string, or an inline map or
-			// list, any inline the grammar holds.
-			p.pos++ // consume the value's own line
-			val, in, err := p.parseInline(first, first.text)
-			item.InCmt = in
-			return val, err
-		}
-	case first.text == "---" && len(first.indent) > len(fence):
+	if first.indent == fence {
+		return p.parseValue(item, first)
+	}
+	if first.text == "---" && len(first.indent) > len(fence) {
 		// A nested list fence: the grammar's INDENT listfence
 		// DEDENT - deeper than the enclosing fence's delimiters.
-		// The enclosing list records the indent its nested
-		// fences open at; the inner list is placed by it.
 		return p.parseListFence(first)
 	}
 	// A dashed list, a map, or an inline item at a deeper
 	// prefix: only a nested list fence opens a deeper block
-	// inside a fence. The offending element is named at its
-	// own position - the line the deeper block opened at.
+	// inside a fence.
 	return nil, errAt(indentPos(first), "list element indent must align with fence")
 }
 
-// cmtNoFencePrefix rejects the pending run before a fence
-// value: the fence must open at the very next line after its
-// pair, so a comment or a blank between them has no home -
-// not the fence's content, which is the string, and not the
-// pair's line, which is above. The error names the offending
-// line at its own position: the comment for a comment, the
-// blank for a blank.
+// cmtNoFencePrefix rejects a pending run before a fence: the
+// fence must open at the very next line after its pair.
 func (p *parser) cmtNoFencePrefix() error {
 	for _, ln := range p.pending {
 		if ln.text != "" {
@@ -1006,11 +830,8 @@ func (p *parser) cmtNoFencePrefix() error {
 	return nil
 }
 
-// parseInline reads one inline value on the item's line: the
-// grammar's inline production. The value starts at the given
-// column: the offset of text within the line plus one. It may
-// carry a trailing comment, returned verbatim from its first
-// blank.
+// parseInline reads one inline value on the item's line. It may
+// carry a trailing comment, returned verbatim from its first blank.
 func (p *parser) parseInline(ln line, text string) (Value, Cmt, error) {
 	val, rest, err := p.scanValueAt(ln, text)
 	if err != nil {
@@ -1022,18 +843,15 @@ func (p *parser) parseInline(ln line, text string) (Value, Cmt, error) {
 		return val, Cmt{Text: []string{cmt}, Pos: Pos{L: ln.num, C: col}}, nil
 	}
 	if left != "" {
-		// The leftover sits at the line's tail: its own first
-		// column, the honest spot for what refuses to parse.
+		// The leftover sits at the line's tail, at its own first column.
 		return nil, Cmt{}, errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
 	}
 	return val, Cmt{}, nil
 }
 
-// stripTrail splits a trailing comment off the rest of a value:
-// at least one blank, then #, then free text to the end of the
-// line. The blank is required - a # glued to the value is
-// content, not a comment. The comment text is verbatim, from
-// its first blank.
+// stripTrail splits a trailing comment - at least one blank,
+// then # - off the rest of a value. The blank is required:
+// a # glued to the value is content.
 func stripTrail(rest string) (left, cmt string, ok bool) {
 	i := 0
 	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
@@ -1051,9 +869,7 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 	col := len(ln.text) - len(text) + len(ln.indent) + 1
 	pos := Pos{L: ln.num, C: col}
 	if text == "" {
-		// An empty scan: the caller's text is spent - the
-		// unclosed list's tail is the usual source. The
-		// error names the empty scan's start.
+		// An empty scan: the caller's text is spent.
 		return nil, "", errAt(pos, "cannot parse value at \"\"")
 	}
 	switch text[0] {
@@ -1067,8 +883,6 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 		}
 		s, rest, err := scanDoubleQuoted(text)
 		if err != nil {
-			// The quoted value opens at pos; its escape errors name
-			// the backslash's column, advanced over the token.
 			return nil, "", errAtScan(pos, text, err)
 		}
 		return &Str{Data: s, Quote: DoubleQuoted, Pos: pos}, rest, nil
@@ -1078,25 +892,20 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 		}
 		s, rest, err := scanSingleQuoted(text)
 		if err != nil {
-			// The single-quoted value opens at pos too; its one
-			// error - the missing close - names it there.
 			return nil, "", errAt(pos, err.Error())
 		}
 		return &Str{Data: s, Quote: SingleQuoted, Pos: pos}, rest, nil
 	}
-	tok, rest := scanNumberToken(text)
+	tok, rest := scanScalarToken(text)
 	switch tok {
 	case "null", "true", "false":
 		return &Scalar{Text: tok, Pos: pos}, rest, nil
 	case "":
-		// No token at all - the text starts outside every
-		// scanned class. The error names the empty token's
-		// start, the same anchor the other raises use.
+		// The text starts outside every scanned class.
 		return nil, "", errAt(pos, fmt.Sprintf("cannot parse value at %q", text))
 	}
 	// A bare word is never a value: the token must be
-	// number-shaped to be a Num. The error names the token at
-	// its own start position.
+	// number-shaped to be a Num.
 	body := strings.TrimPrefix(tok, "-")
 	if body == "" || body[0] < '0' || body[0] > '9' {
 		return nil, "", errAt(pos, fmt.Sprintf("cannot parse unquoted value %q", tok))
@@ -1135,10 +944,9 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 	return &Num{Text: tok, Pos: pos}, rest, nil
 }
 
-// isDecimalShape reports whether body matches the grammar's
-// decimal spellings: numint [ "." 1*DIGIT ] [ "e" ["+" / "-"]
-// 1*DIGIT ]. The redundant leading zero is checked separately,
-// for its own message.
+// isDecimalShape matches the grammar's decimal spellings:
+// numint [ "." 1*DIGIT ] [ "e" ["+" / "-"] 1*DIGIT ]. The redundant
+// leading zero is checked separately, for its own message.
 func isDecimalShape(body string) bool {
 	mantissa := body
 	if i := strings.IndexByte(body, 'e'); i >= 0 {
@@ -1176,10 +984,9 @@ func allDigits(s string) bool {
 	return true
 }
 
-// scanNumberToken reads one number-shaped token: an optional
-// leading minus, digits, letters for the bases, dots, and a sign
-// directly after an exponent e.
-func scanNumberToken(text string) (tok, rest string) {
+// scanScalarToken reads the maximal token that could spell
+// a scalar; the caller tells number, keyword, or bare word.
+func scanScalarToken(text string) (tok, rest string) {
 	cut := 0
 	if cut < len(text) && text[cut] == '-' {
 		cut++
@@ -1198,16 +1005,9 @@ func scanNumberToken(text string) (tok, rest string) {
 	return text, ""
 }
 
-// scanFencedLine reads the single-line fence forms, """..."""
-// and ”'...”', where the escapes stand for the newlines of
-// the block form. The fence closes at the first delimiter;
-// whatever follows is the caller's to read - a trailing
-// comment, or an error when it is not one. A stray quote
-// after the close, as in ”'foo”, is a syntax error, not
-// content - the grammar is ambiguous there, and the typo
-// reading wins. In the escaped family the search skips escape
-// sequences, so a \" in the content cannot open a false
-// delimiter.
+// scanFencedLine reads a one-line fence: the first delimiter
+// closes, and the escaped family's search skips escapes.
+// A stray quote after the close is a typo, not content.
 func (p *parser) scanFencedLine(ln line, text, quote string, pos Pos) (Value, string, error) {
 	delim := strings.Repeat(quote, 3)
 	q := SingleFenced
@@ -1240,13 +1040,10 @@ func (p *parser) scanFencedLine(ln line, text, quote string, pos Pos) (Value, st
 	if quote == `"` {
 		unq, err := unescape(inner)
 		if err != nil {
-			// The interior starts three quotes past the token
-			// start; the escape error names the backslash's
-			// column, advanced over the interior.
+			// The interior starts three quotes past the token start.
 			return nil, "", errAtScan(innerPos, inner, err)
 		}
-		// The compact interior records as one element, its
-		// tail whatever the value says: the grammar's close
+		// The compact interior records as one element: the close
 		// adds neither a marker nor a terminator.
 		return &Str{Data: unq, Text: []string{inner}, Quote: q, Pos: pos}, rest, nil
 	}
@@ -1254,11 +1051,9 @@ func (p *parser) scanFencedLine(ln line, text, quote string, pos Pos) (Value, st
 	return &Str{Data: inner, Text: []string{inner}, Quote: q, Pos: pos}, rest, nil
 }
 
-// scanInlineList reads "[1, 2]" in the one-line form,
-// producing a List. The current text is always a suffix of the
-// line, so its offset within the line anchors the inner
-// positions. Elements are inline values, recursing through
-// scanValueAt, so nested lists work with no extra code.
+// scanInlineList reads "[1, 2]" in the one-line form. Elements
+// are inline values, recursing through scanValueAt, so nested
+// lists work with no extra code.
 func (p *parser) scanInlineList(ln line, text string, pos Pos) (Value, string, error) {
 	l := &List{Items: []*Item{}, Pos: pos} // inline: the zero form
 	text = strings.TrimLeft(text[1:], " \t")
@@ -1290,9 +1085,7 @@ func (p *parser) scanInlineList(ln line, text string, pos Pos) (Value, string, e
 }
 
 // scanInlineMap reads "{ a: 1, b: 2 }" in the native item
-// grammar, producing an Inline-form Map. The current text is
-// always a suffix of the line, so its offset within the line
-// anchors the inner positions.
+// grammar, producing an inline-form Map.
 func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, error) {
 	m := &Map{Items: []*Item{}, Pos: pos}
 	text = strings.TrimLeft(text[1:], " \t")
@@ -1324,8 +1117,7 @@ func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, er
 		m.Items = append(m.Items, &Item{Key: path, Value: val})
 		rest = strings.TrimLeft(rest, " \t")
 		if rest == "" {
-			// The map that never closes is named where it
-			// opened: its own start, so nested maps tell apart.
+			// Named where it opened, so nested maps tell apart.
 			return nil, "", errAt(pos, "cannot find closing `}`")
 		}
 		if rest[0] == '}' {
@@ -1342,8 +1134,7 @@ func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, er
 
 // A scanError is an error a byte scanner raises inside the
 // text it was scanning: the offset names where the offender
-// sits within that text. A caller holding the source position
-// wraps it into a true one through errAtScan.
+// sits within that text.
 type scanError struct {
 	offset int
 	msg    string
@@ -1351,10 +1142,9 @@ type scanError struct {
 
 func (e scanError) Error() string { return e.msg }
 
-// scanKeyPath reads a dotted path of key segments, recording
-// each segment's offset within the original text for position
-// tracking. Spaces are rejected: between segments, after the
-// dot, or before the colon.
+// scanKeyPath reads a dotted path of key segments, recording each
+// segment's offset in the text for position tracking. Spaces are
+// rejected: between segments, after the dot, or before the colon.
 func scanKeyPath(text string) ([]*Str, string, error) {
 	if text == "" || text[0] == '.' {
 		return nil, "", scanError{0, "cannot parse empty key segment"}
@@ -1365,8 +1155,7 @@ func scanKeyPath(text string) ([]*Str, string, error) {
 		seg, after, err := scanKey(text)
 		if err != nil {
 			// A segment scanner error names its spot within the
-			// segment; the path advances it by what came before,
-			// so the offset lands in the whole path's frame.
+			// segment; the path advances it by what came before.
 			if serr, ok := err.(scanError); ok {
 				serr.offset += consumed
 				return nil, "", serr
@@ -1419,9 +1208,7 @@ func scanKey(text string) (*Str, string, error) {
 	}
 	for _, r := range seg {
 		if !isBareRune(r) {
-			// A bad word is named at its start: the offset is
-			// the segment's own, the caller's consumed count
-			// locating it within the path.
+			// A bad word is named at its start.
 			return nil, "", scanError{0, fmt.Sprintf("cannot parse key %q", seg)}
 		}
 	}
@@ -1430,8 +1217,7 @@ func scanKey(text string) (*Str, string, error) {
 
 // scanDoubleQuoted reads a double-quoted string, processing
 // escapes. Its escape errors carry the backslash's offset
-// within the token, so a caller holding the source position
-// can name the exact column where the escape starts.
+// within the token, for the caller to name the exact column.
 func scanDoubleQuoted(text string) (string, string, error) {
 	var b strings.Builder
 	i := 1
