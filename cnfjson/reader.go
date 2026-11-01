@@ -15,12 +15,11 @@
 
 // Package cnfjson renders cnf ASTs as JSON text.
 //
-// The rendering is a walk over the AST: keys keep their
-// document order, strings re-escape into JSON's double-quoted
-// form, and numbers normalize - the decimal forms pass
-// through verbatim, keeping their zeros and their precision,
-// and the other bases convert to decimal, any width, by
-// repeated division of the digit string.
+// The rendering is a read-only walk over the AST: keys keep their document
+// order, strings re-escape into JSON's double-quoted form, and numbers
+// normalize - the decimal forms pass through verbatim, keeping their zeros
+// and their precision, and the other bases convert to decimal in any width,
+// by repeated division of the digit string.
 package cnfjson
 
 import (
@@ -28,18 +27,12 @@ import (
 	"strings"
 
 	"github.com/canonical/go-cnf/cnfast"
-	"github.com/canonical/go-cnf/cnfpretty"
 )
 
-// RenderJSON renders a cnf AST hierarchy as json text.
+// RenderJSON renders a cnf AST hierarchy as json text. The
+// AST is only read: the interpretation happens in the
+// keyTree, so the tree the caller holds is never touched.
 func RenderJSON(root *cnfast.Item, opts *Options) ([]byte, error) {
-	// The unfold mutates the tree it is given, so the render
-	// clones first: the caller's AST is never touched.
-	root = cnfast.Clone(root)
-	unfold := cnfpretty.Options{UnfoldMapFromItems: 1, UnfoldPathFromDepth: 1}
-	if err := cnfpretty.Apply(root, &unfold); err != nil {
-		return nil, err
-	}
 	var b strings.Builder
 	if err := writeValue(&b, root.Value); err != nil {
 		return nil, err
@@ -67,21 +60,11 @@ func writeValue(b *strings.Builder, v any) error {
 		b.WriteString(n.Text)
 		return nil
 	case *cnfast.Map:
-		b.WriteString("{")
-		for i, item := range n.Items {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			if err := writeKey(b, item.Key); err != nil {
-				return err
-			}
-			b.WriteString(":")
-			if err := writeValue(b, item.Value); err != nil {
-				return err
-			}
+		nodes, err := keyTreeFor(n)
+		if err != nil {
+			return err
 		}
-		b.WriteString("}")
-		return nil
+		return writeKeyTree(b, nodes)
 	case *cnfast.List:
 		b.WriteString("[")
 		for i, item := range n.Items {
@@ -116,17 +99,6 @@ func keyWrap(key []*cnfast.Str, v cnfast.Value) cnfast.Value {
 		v = &cnfast.Map{Items: []*cnfast.Item{{Key: key[i : i+1], Value: v}}}
 	}
 	return v
-}
-
-// writeKey writes one item's key as a JSON string: the
-// unfolded tree holds single-segment keys, so the one segment
-// is written quoted, the decoded text escaped into JSON's
-// double-quoted form.
-func writeKey(b *strings.Builder, key []*cnfast.Str) error {
-	if len(key) != 1 {
-		return fmt.Errorf("cannot render key of %d segments", len(key))
-	}
-	return writeQuoted(b, key[0].Data)
 }
 
 // writeString writes one string value as JSON: the decoded
