@@ -45,7 +45,7 @@ var renderJSONTests = []struct {
 }, {
 	name:  "bad digit",
 	value: &cnfast.Map{Items: []*cnfast.Item{pair("a", num("12b"))}},
-	err:   `cannot parse number "12b"`,
+	err:   "cannot parse number `12b`",
 }, {
 	name: "scalar over scalar",
 	value: &cnfast.Map{Items: []*cnfast.Item{

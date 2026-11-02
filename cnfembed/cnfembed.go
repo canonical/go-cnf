@@ -323,7 +323,16 @@ func quoteShort(s string) string {
 			break
 		}
 	}
-	return fmt.Sprintf("%q", s)
+	return fmt.Sprintf("`%s`", Escape(s))
+}
+
+// Escape escapes s by the double-quote rule, without the quotes.
+func Escape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		b.WriteString(escapeCNF(r))
+	}
+	return b.String()
 }
 
 // parse reads a cnf document into its root value node.
@@ -861,7 +870,7 @@ func trailing(ln line, rest string) error {
 	if ok || left == "" {
 		return nil
 	}
-	return errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
+	return errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing `%s`", Escape(left)))
 }
 
 // stripTrail splits a trailing comment - at least one blank,
@@ -924,7 +933,7 @@ func (p *parser) scanValueAt(ln line, text string) (*keyNode, string, error) {
 		return &keyNode{json: tok}, rest, nil
 	case "":
 		// The text starts outside every scanned class.
-		return nil, "", errAt(pt, fmt.Sprintf("cannot parse value at %q", text))
+		return nil, "", errAt(pt, fmt.Sprintf("cannot parse value at `%s`", Escape(text)))
 	}
 	val, err := scanNumber(tok, pt)
 	if err != nil {
@@ -939,7 +948,7 @@ func (p *parser) scanValueAt(ln line, text string) (*keyNode, string, error) {
 func scanNumber(tok string, pt pos) (*keyNode, error) {
 	body := strings.TrimPrefix(tok, "-")
 	if body == "" || body[0] < '0' || body[0] > '9' {
-		return nil, errAt(pt, fmt.Sprintf("cannot parse unquoted value %q", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse unquoted value `%s`", Escape(tok)))
 	}
 	if len(body) > 2 && body[0] == '0' {
 		bases := []byte{'x', 16, 'o', 8, 'b', 2}
@@ -951,7 +960,7 @@ func scanNumber(tok string, pt pos) (*keyNode, error) {
 			digits := body[2:]
 			for _, c := range digits {
 				if v := digitVal(c); v < 0 || v >= base {
-					return nil, errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
+					return nil, errAt(pt, fmt.Sprintf("cannot parse number `%s`", Escape(tok)))
 				}
 			}
 			json := baseToDecimal(digits, base)
@@ -962,13 +971,13 @@ func scanNumber(tok string, pt pos) (*keyNode, error) {
 		}
 	}
 	if strings.ContainsRune(body, 'E') {
-		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q: uppercase exponent", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number `%s`: uppercase exponent", Escape(tok)))
 	}
 	if len(body) > 1 && body[0] == '0' && body[1] >= '0' && body[1] <= '9' {
-		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q: redundant leading zero", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number `%s`: redundant leading zero", Escape(tok)))
 	}
 	if !isDecimalShape(body) {
-		return nil, errAt(pt, fmt.Sprintf("cannot parse number %q", tok))
+		return nil, errAt(pt, fmt.Sprintf("cannot parse number `%s`", Escape(tok)))
 	}
 	return &keyNode{json: tok}, nil
 }
@@ -995,7 +1004,7 @@ func (p *parser) scanInlineList(ln line, text string, at pos) (*keyNode, string,
 			return &keyNode{list: true, sub: elems}, rest[1:], nil
 		}
 		if rest[0] != ',' {
-			return nil, "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside list", rest))
+			return nil, "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse `%s` inside list", Escape(rest)))
 		}
 		text = strings.TrimLeft(rest[1:], " \t")
 	}
@@ -1033,7 +1042,7 @@ func (p *parser) scanInlineMapInto(ln line, text string, at pos, scope *keyNode)
 			return rest[1:], nil
 		}
 		if rest[0] != ',' {
-			return "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside map", rest))
+			return "", errAt(pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse `%s` inside map", Escape(rest)))
 		}
 		text = strings.TrimLeft(rest[1:], " \t")
 	}
@@ -1149,7 +1158,7 @@ func scanKey(text string) (*keyNode, string, error) {
 		if !isBareRune(r) {
 			// Named at the segment start, so the path's
 			// consumed count locates it.
-			return nil, "", scanError{0, fmt.Sprintf("cannot parse key %q", seg)}
+			return nil, "", scanError{0, fmt.Sprintf("cannot parse key `%s`", Escape(seg))}
 		}
 	}
 	return &keyNode{key: seg, quote: unquoted}, rest, nil

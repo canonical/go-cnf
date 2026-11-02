@@ -47,7 +47,7 @@ func value(v cnfast.Value) (any, error) {
 		case "null":
 			return nil, nil
 		}
-		return nil, fmt.Errorf("cannot decode scalar %q", n.Text)
+		return nil, fmt.Errorf("cannot decode scalar `%s`", cnfast.Escape(n.Text))
 	case *cnfast.Num:
 		return parseNumber(n.Text)
 	case *cnfast.List:
@@ -136,7 +136,7 @@ func parseNumber(s string) (float64, error) {
 		// failing - the spec's floor is double precision, and
 		// a tiny parser meets it without big-number machinery.
 		if digits == "" {
-			return 0, fmt.Errorf("cannot parse number %q", text)
+			return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 		}
 		if n, err := strconv.ParseInt(digits, base, 64); err == nil {
 			return sign * float64(n), nil
@@ -148,7 +148,7 @@ func parseNumber(s string) (float64, error) {
 		for _, c := range digits {
 			d := digitVal(c)
 			if d < 0 || d >= base {
-				return 0, fmt.Errorf("cannot parse number %q", text)
+				return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 			}
 			f = f*float64(base) + float64(d)
 		}

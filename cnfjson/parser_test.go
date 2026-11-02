@@ -86,8 +86,8 @@ func TestParseJSONErrors(t *testing.T) {
 		in   string
 		want string // a substring of the error
 	}{
-		{name: "duplicate key", in: `{"a":1,"a":2}`, want: `cannot redefine key "a"`},
-		{name: "duplicate nested", in: `{"a":{"b":1,"b":2}}`, want: `cannot redefine key "b"`},
+		{name: "duplicate key", in: `{"a":1,"a":2}`, want: "cannot redefine key `a`"},
+		{name: "duplicate nested", in: `{"a":{"b":1,"b":2}}`, want: "cannot redefine key `b`"},
 		{name: "trailing value", in: `{"a":1} {"b":2}`, want: "trailing"},
 		{name: "two documents", in: `1 2`, want: "trailing"},
 	} {

@@ -46,14 +46,14 @@ func writeNumber(b *strings.Builder, n *cnfast.Num) error {
 	if base != 10 {
 		out, err := baseToDecimal(digits, base)
 		if err != nil {
-			return fmt.Errorf("cannot parse number %q", n.Text)
+			return fmt.Errorf("cannot parse number `%s`", cnfast.Escape(n.Text))
 		}
 		b.WriteString(sign)
 		b.WriteString(out)
 		return nil
 	}
 	if !isDecimalShape(word) {
-		return fmt.Errorf("cannot parse number %q", n.Text)
+		return fmt.Errorf("cannot parse number `%s`", cnfast.Escape(n.Text))
 	}
 	b.WriteString(n.Text)
 	return nil
@@ -110,7 +110,7 @@ func baseToDecimal(digits string, base int) (string, error) {
 	}
 	for _, c := range digits {
 		if _, ok := digitVal(c, base); !ok {
-			return "", fmt.Errorf("bad digit %q", c)
+			return "", fmt.Errorf("bad digit `%s`", cnfast.Escape(string(c)))
 		}
 	}
 	var out []byte

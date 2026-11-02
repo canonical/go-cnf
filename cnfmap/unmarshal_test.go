@@ -122,19 +122,19 @@ var unmarshalErrTests = []struct {
 }, {
 	name: "junk suffix on number",
 	in:   "a: 1x\n",
-	want: "1:4: cannot parse number \"1x\"",
+	want: "1:4: cannot parse number `1x`",
 }, {
 	name: "empty hex digits",
 	in:   "a: 0x\n",
-	want: "1:4: cannot parse number \"0x\"",
+	want: "1:4: cannot parse number `0x`",
 }, {
 	name: "bad hex digit",
 	in:   "a: 0xg\n",
-	want: "1:4: cannot parse number \"0xg\"",
+	want: "1:4: cannot parse number `0xg`",
 }, {
 	name: "bare word in value position",
 	in:   "a: two\n",
-	want: "1:4: cannot parse unquoted value \"two\"",
+	want: "1:4: cannot parse unquoted value `two`",
 }}
 
 func TestUnmarshal(t *testing.T) {

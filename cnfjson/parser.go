@@ -102,7 +102,7 @@ func walkValue(dec *json.Decoder) (jval, error) {
 		case '[':
 			return walkList(dec)
 		}
-		return jval{}, fmt.Errorf("cannot parse unexpected delimiter %q", t)
+		return jval{}, fmt.Errorf("cannot parse unexpected delimiter `%s`", cnfast.Escape(t.String()))
 	case json.Number:
 		return jval{kind: jnumber, num: foldExponent(t.String())}, nil
 	case string:
@@ -127,7 +127,7 @@ func walkMap(dec *json.Decoder) (jval, error) {
 			return jval{}, fmt.Errorf("cannot parse object key %T", keyTok)
 		}
 		if _, exists := m.vals[key]; exists {
-			return jval{}, fmt.Errorf("cannot redefine key %q", key)
+			return jval{}, fmt.Errorf("cannot redefine key `%s`", cnfast.Escape(key))
 		}
 		val, err := walkValue(dec)
 		if err != nil {

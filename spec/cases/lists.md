@@ -86,7 +86,7 @@ bracket; anything else is named at its own first column.
 ```
 to-json: "error"
 to-ast: "error"
-error: {regexp: "^1:${off:c}: cannot parse \"${off}\" inside list$"}
+error: {regexp: "^1:${off:c}: cannot parse `${off}` inside list$"}
 vars:
     off: {regexp: "(; 2\\]|2\\])"}
 ```

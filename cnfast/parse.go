@@ -102,7 +102,16 @@ func quoteShort(s string) string {
 			break
 		}
 	}
-	return fmt.Sprintf("%q", s)
+	return "`" + Escape(s) + "`"
+}
+
+// Escape escapes s by the double-quote rule, without the quotes.
+func Escape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		b.WriteString(escapeRune(r))
+	}
+	return b.String()
 }
 
 // keyPath spells one key path for an error message: dot-joined
@@ -844,7 +853,7 @@ func (p *parser) parseInline(ln line, text string) (Value, Cmt, error) {
 	}
 	if left != "" {
 		// The leftover sits at the line's tail, at its own first column.
-		return nil, Cmt{}, errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing %q", left))
+		return nil, Cmt{}, errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(left)}, fmt.Sprintf("cannot parse trailing `%s`", Escape(left)))
 	}
 	return val, Cmt{}, nil
 }
@@ -902,13 +911,13 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 		return &Scalar{Text: tok, Pos: pos}, rest, nil
 	case "":
 		// The text starts outside every scanned class.
-		return nil, "", errAt(pos, fmt.Sprintf("cannot parse value at %q", text))
+		return nil, "", errAt(pos, fmt.Sprintf("cannot parse value at `%s`", Escape(text)))
 	}
 	// A bare word is never a value: the token must be
 	// number-shaped to be a Num.
 	body := strings.TrimPrefix(tok, "-")
 	if body == "" || body[0] < '0' || body[0] > '9' {
-		return nil, "", errAt(pos, fmt.Sprintf("cannot parse unquoted value %q", tok))
+		return nil, "", errAt(pos, fmt.Sprintf("cannot parse unquoted value `%s`", Escape(tok)))
 	}
 	// The base prefixes carry their own digit grammar.
 	for _, p := range []struct {
@@ -920,11 +929,11 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 		if strings.HasPrefix(body, p.prefix) {
 			digits := body[len(p.prefix):]
 			if digits == "" {
-				return nil, "", errAt(pos, fmt.Sprintf("cannot parse number %q", tok))
+				return nil, "", errAt(pos, fmt.Sprintf("cannot parse number `%s`", Escape(tok)))
 			}
 			for _, c := range digits {
 				if digitVal(c) < 0 || digitVal(c) >= p.base {
-					return nil, "", errAt(pos, fmt.Sprintf("cannot parse number %q", tok))
+					return nil, "", errAt(pos, fmt.Sprintf("cannot parse number `%s`", Escape(tok)))
 				}
 			}
 			return &Num{Text: tok, Pos: pos}, rest, nil
@@ -933,13 +942,13 @@ func (p *parser) scanValueAt(ln line, text string) (Value, string, error) {
 	// The grammar is lowercase-only: uppercase exponents are
 	// errors, and so are redundant leading zeros.
 	if strings.ContainsRune(body, 'E') {
-		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number %q: uppercase exponent", tok))
+		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number `%s`: uppercase exponent", Escape(tok)))
 	}
 	if len(body) > 1 && body[0] == '0' && body[1] >= '0' && body[1] <= '9' {
-		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number %q: redundant leading zero", tok))
+		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number `%s`: redundant leading zero", Escape(tok)))
 	}
 	if !isDecimalShape(body) {
-		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number %q", tok))
+		return nil, "", errAt(pos, fmt.Sprintf("cannot parse number `%s`", Escape(tok)))
 	}
 	return &Num{Text: tok, Pos: pos}, rest, nil
 }
@@ -1078,7 +1087,7 @@ func (p *parser) scanInlineList(ln line, text string, pos Pos) (Value, string, e
 		if rest[0] != ',' {
 			// The leftover at its own first column: the honest
 			// spot for what refuses to be a separator.
-			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside list", rest))
+			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse `%s` inside list", Escape(rest)))
 		}
 		text = strings.TrimLeft(rest[1:], " \t")
 	}
@@ -1126,7 +1135,7 @@ func (p *parser) scanInlineMap(ln line, text string, pos Pos) (Value, string, er
 		if rest[0] != ',' {
 			// The leftover at its own first column: the honest
 			// spot for what refuses to be a separator.
-			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse %q inside map", rest))
+			return nil, "", errAt(Pos{L: ln.num, C: len(ln.indent) + 1 + len(ln.text) - len(rest)}, fmt.Sprintf("cannot parse `%s` inside map", Escape(rest)))
 		}
 		text = strings.TrimLeft(rest[1:], " \t")
 	}
@@ -1209,7 +1218,7 @@ func scanKey(text string) (*Str, string, error) {
 	for _, r := range seg {
 		if !isBareRune(r) {
 			// A bad word is named at its start.
-			return nil, "", scanError{0, fmt.Sprintf("cannot parse key %q", seg)}
+			return nil, "", scanError{0, fmt.Sprintf("cannot parse key `%s`", Escape(seg))}
 		}
 	}
 	return &Str{Data: seg, Quote: Unquoted}, rest, nil
