@@ -330,7 +330,7 @@ func quoteShort(s string) string {
 func Escape(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		b.WriteString(escapeCNF(r))
+		b.WriteString(escapeCnf(r))
 	}
 	return b.String()
 }
@@ -341,7 +341,13 @@ func parse(data []byte) (*keyNode, error) {
 		return nil, invalidUTF8Err(data)
 	}
 	p := &parser{lines: splitLines(string(data))}
-	return p.parseTop()
+	root, err := p.parseTop()
+	if err != nil {
+		return nil, err
+	}
+	// The whole document parsed: the first key conflict, if
+	// one was recorded along the way, is the answer now.
+	return root, p.first
 }
 
 // invalidUTF8Err locates the first invalid byte in data and
@@ -374,6 +380,13 @@ type parser struct {
 	lines   []line
 	pos     int
 	pending []line // comment and blank lines, not yet validated
+	first   error  // the first key conflict, reported once the document parses whole
+}
+
+func (p *parser) saveErr(err error) {
+	if p.first == nil {
+		p.first = err
+	}
 }
 
 // peekStruct returns the next structural line, collecting the
@@ -581,10 +594,13 @@ func (p *parser) parseItem(ln line, scope *keyNode) error {
 		}
 	default:
 		// A block map: the path expands once, and its items
-		// read straight into the expansion.
+		// read straight into the expansion. A conflict is kept,
+		// not raised: the items still parse, into a scope the
+		// error path drops.
 		tip, err := scope.expand(path)
 		if err != nil {
-			return err
+			p.saveErr(err)
+			tip = &keyNode{}
 		}
 		return p.parseMap(tip, next.indent)
 	}
@@ -592,7 +608,10 @@ func (p *parser) parseItem(ln line, scope *keyNode) error {
 	if err != nil {
 		return err
 	}
-	return scope.define(path, val)
+	if err := scope.define(path, val); err != nil {
+		p.saveErr(err)
+	}
+	return nil
 }
 
 // scanPairInto reads a pair's inline value: an inline map
@@ -601,7 +620,8 @@ func (p *parser) scanPairInto(ln line, scope *keyNode, path []*keyNode, text str
 	if text != "" && text[0] == '{' {
 		tip, err := scope.expand(path)
 		if err != nil {
-			return "", err
+			p.saveErr(err)
+			tip = &keyNode{}
 		}
 		pt := pos{L: ln.num, C: len(ln.text) - len(text) + len(ln.indent) + 1}
 		return p.scanInlineMapInto(ln, text, pt, tip)
@@ -610,7 +630,10 @@ func (p *parser) scanPairInto(ln line, scope *keyNode, path []*keyNode, text str
 	if err != nil {
 		return "", err
 	}
-	return rest, scope.define(path, val)
+	if err := scope.define(path, val); err != nil {
+		p.saveErr(err)
+	}
+	return rest, nil
 }
 
 // parseBlockList reads one block list's "- item" lines at
@@ -670,6 +693,7 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 	p.pos++ // consume the opening delimiter
 	escaped := delim == `"""`
 	var b strings.Builder
+	b.WriteByte('"')
 	indentChar := byte(' ')
 	if len(prefix) > 0 {
 		indentChar = prefix[0]
@@ -681,7 +705,8 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 		// The close wins even over a continuation: the
 		// escape ate the newline, the value ends without one.
 		if ln.indent == prefix && ln.text == delim {
-			return jsonString(b.String()), nil
+			b.WriteByte('"')
+			return b.String(), nil
 		}
 		if !continued && !sameIndentChar(ln.indent, indentChar) {
 			return "", errAt(indentPos(ln), "cannot mix indentation prefixes in fence")
@@ -693,14 +718,14 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 			}
 			// A blank line with a valid but shallower prefix:
 			// the line contributes the newline only.
-			b.WriteString("\n")
+			b.WriteString(`\n`)
 			continue
 		}
 		if ln.text == "" {
 			// A blank line at or deeper than the fence prefix:
 			// its whitespace is content, with its terminator.
-			b.WriteString(ln.indent[len(prefix):])
-			b.WriteString("\n")
+			writeEscapedJSON(&b, ln.indent[len(prefix):])
+			b.WriteString(`\n`)
 			continue
 		}
 		if !strings.HasPrefix(ln.indent, prefix) {
@@ -711,20 +736,24 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 		content := ln.indent[len(prefix):] + ln.text
 		contentPos := pos{L: ln.num, C: len(prefix) + 1}
 		continued = false
-		if escaped && oddTrailingBackslashes(content) {
-			content = content[:len(content)-1]
-			continued = true
-		}
-		if escaped {
-			unq, err := unescape(content)
-			if err != nil {
+		if escaped && strings.IndexByte(content, '\\') >= 0 {
+			// Only a backslash can unescape or continue a line;
+			// plain content flows to the reescaper as it stands.
+			if oddTrailingBackslashes(content) {
+				content = content[:len(content)-1]
+				continued = true
+			}
+			if err := writeReescapedJSON(&b, content); err != nil {
 				return "", errAtScan(contentPos, content, err)
 			}
-			content = unq
+			if !continued {
+				b.WriteString(`\n`)
+			}
+			continue
 		}
-		b.WriteString(content)
+		writeEscapedJSON(&b, content)
 		if !continued {
-			b.WriteString("\n")
+			b.WriteString(`\n`)
 		}
 	}
 	return "", errAt(indentPos(next), "cannot find closing fence")
@@ -749,30 +778,6 @@ func oddTrailingBackslashes(s string) bool {
 		n++
 	}
 	return n%2 == 1
-}
-
-// unescape decodes the closed escape set over raw text. Its
-// errors carry the backslash's offset, for the caller to
-// name the exact column.
-func unescape(s string) (string, error) {
-	var b strings.Builder
-	for i := 0; i < len(s); {
-		if s[i] != '\\' {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
-		if i+1 >= len(s) {
-			return "", scanError{i, "cannot end line on an escape"}
-		}
-		r, n, err := scanEscape(s[i:])
-		if err != nil {
-			return "", scanError{i, err.Error()}
-		}
-		b.WriteRune(r)
-		i += n
-	}
-	return b.String(), nil
 }
 
 // parseListFence reads one --- delimited list from its
@@ -839,6 +844,7 @@ func (p *parser) parseListFence(next line) (*keyNode, error) {
 		if err != nil {
 			return nil, err
 		}
+		p.saveErr(sub.first) // the element's own conflicts count too
 		if sub.pos != len(sub.lines) {
 			// Content after the element's value.
 			return nil, errAt(indentPos(sub.lines[sub.pos]), "cannot parse content in list fence element")
@@ -1075,12 +1081,18 @@ func (p *parser) scanFencedLine(ln line, text, quote string, at pos) (*keyNode, 
 	inner := text[3 : 3+end]
 	innerPos := pos{L: at.L, C: at.C + 3}
 	rest := text[3+end+3:]
+	if !needsEscape(inner) {
+		return &keyNode{json: `"` + inner + `"`}, rest, nil
+	}
 	if quote == `"` {
-		unq, err := unescape(inner)
-		if err != nil {
+		var b strings.Builder
+		b.Grow(len(inner) + 2)
+		b.WriteByte('"')
+		if err := writeReescapedJSON(&b, inner); err != nil {
 			return nil, "", errAtScan(innerPos, inner, err)
 		}
-		return &keyNode{json: jsonString(unq)}, rest, nil
+		b.WriteByte('"')
+		return &keyNode{json: b.String()}, rest, nil
 	}
 	// The raw family holds the interior as it stands.
 	return &keyNode{json: jsonString(text[3 : 3+end])}, rest, nil
@@ -1165,7 +1177,11 @@ func scanKey(text string) (*keyNode, string, error) {
 }
 
 // scanDoubleQuoted reads a double-quoted string, processing escapes.
+// The common escape-free string is returned as a slice of the input.
 func scanDoubleQuoted(text string) (string, string, error) {
+	if i := strings.IndexAny(text[1:], `"\\`); i >= 0 && text[1+i] != '\\' {
+		return text[1 : 1+i], text[2+i:], nil
+	}
 	var b strings.Builder
 	i := 1
 	for i < len(text) {
@@ -1370,45 +1386,95 @@ func allDigits(s string) bool {
 // The json encoding of the leaf values
 //
 
-// writeJSONString writes s as a json string: the closed set
-// escaped, the rest verbatim.
 func writeJSONString(b *strings.Builder, s string) {
-	b.WriteString(`"`)
-	for _, r := range s {
-		b.WriteString(escapeJSON(r))
-	}
-	b.WriteString(`"`)
+	b.WriteByte('"')
+	writeEscapedJSON(b, s)
+	b.WriteByte('"')
 }
 
-// escapeJSON spells one rune inside a json double-quoted
-// string: the closed set escaped, the rest verbatim.
-func escapeJSON(r rune) string {
-	switch {
-	case r == '"':
-		return `\"`
-	case r == '\\':
-		return `\\`
-	case r == '\n':
-		return `\n`
-	case r == '\r':
-		return `\r`
-	case r == '\t':
-		return `\t`
-	case r == '\b':
-		return `\b`
-	case r == '\f':
-		return `\f`
-	case r < 0x20:
-		return fmt.Sprintf(`\u%04x`, r)
+func writeEscapedJSON(b *strings.Builder, s string) {
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x20 && c != '"' && c != '\\' {
+			continue
+		}
+		if start < i {
+			b.WriteString(s[start:i])
+		}
+		b.WriteString(jsonEscapes[c])
+		start = i + 1
 	}
-	return string(r)
+	b.WriteString(s[start:])
 }
 
-// jsonString writes s as a quoted json string.
+// writeReescapedJSON unescapes s and reescapes as json in one pass.
+func writeReescapedJSON(b *strings.Builder, s string) error {
+	for i := 0; i < len(s); {
+		if s[i] != '\\' {
+			start := i
+			for i < len(s) && s[i] != '\\' {
+				i++
+			}
+			writeEscapedJSON(b, s[start:i])
+			continue
+		}
+		if i+1 >= len(s) {
+			return scanError{i, "cannot end line on an escape"}
+		}
+		r, n, err := scanEscape(s[i:])
+		if err != nil {
+			return scanError{i, err.Error()}
+		}
+		if r < utf8.RuneSelf {
+			if esc := jsonEscapes[r]; esc != "" {
+				b.WriteString(esc)
+			} else {
+				b.WriteByte(byte(r))
+			}
+		} else {
+			b.WriteRune(r)
+		}
+		i += n
+	}
+	return nil
+}
+
+var jsonEscapes = [256]string{
+	'"':  `\"`,
+	'\\': `\\`,
+	'\n': `\n`,
+	'\r': `\r`,
+	'\t': `\t`,
+	'\b': `\b`,
+	'\f': `\f`,
+	0x00: `\u0000`, 0x01: `\u0001`, 0x02: `\u0002`, 0x03: `\u0003`,
+	0x04: `\u0004`, 0x05: `\u0005`, 0x06: `\u0006`, 0x07: `\u0007`,
+	0x0b: `\u000b`,
+	0x0e: `\u000e`, 0x0f: `\u000f`,
+	0x10: `\u0010`, 0x11: `\u0011`, 0x12: `\u0012`, 0x13: `\u0013`,
+	0x14: `\u0014`, 0x15: `\u0015`, 0x16: `\u0016`, 0x17: `\u0017`,
+	0x18: `\u0018`, 0x19: `\u0019`, 0x1a: `\u001a`, 0x1b: `\u001b`,
+	0x1c: `\u001c`, 0x1d: `\u001d`, 0x1e: `\u001e`, 0x1f: `\u001f`,
+}
+
 func jsonString(s string) string {
+	if !needsEscape(s) {
+		return `"` + s + `"`
+	}
 	var b strings.Builder
+	b.Grow(len(s) + 2)
 	writeJSONString(&b, s)
 	return b.String()
+}
+
+func needsEscape(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == '"' || s[i] == '\\' {
+			return true
+		}
+	}
+	return false
 }
 
 // baseToDecimal converts a digit string - already validated
@@ -1475,7 +1541,7 @@ func quote(s string, q quoteKind) string {
 		var b strings.Builder
 		b.WriteRune('"')
 		for _, r := range s {
-			b.WriteString(escapeCNF(r))
+			b.WriteString(escapeCnf(r))
 		}
 		b.WriteRune('"')
 		return b.String()
@@ -1500,10 +1566,10 @@ func isBareWord(s string) bool {
 	return true
 }
 
-// escapeCNF spells one rune inside a double-quoted cnf
+// escapeCnf spells one rune inside a double-quoted cnf
 // string: the closed escape set, \xNN canonical for the C0
 // controls.
-func escapeCNF(r rune) string {
+func escapeCnf(r rune) string {
 	switch {
 	case r == '"':
 		return `\"`
