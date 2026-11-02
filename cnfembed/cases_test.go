@@ -31,7 +31,7 @@ import (
 func TestCases(t *testing.T) {
 	cnftest.RunTests(t, "../spec/cases", cnftest.Harness{
 		Convert: convert,
-		Assert:  assert,
+		Check:   check,
 	})
 }
 
@@ -55,7 +55,7 @@ func convert(direction, source string, reformat cnftest.Reformat) (string, error
 // emits compact JSON, and the JSON grammar allows no newline
 // inside a string value, so the trim touches nothing but the
 // layout.
-func assert(format, kind, want, got string) error {
+func check(format, kind, want, got string) error {
 	if format == "json" {
 		want, got = trimJSON(want), trimJSON(got)
 	}

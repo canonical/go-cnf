@@ -31,7 +31,7 @@ import (
 func TestCases(t *testing.T) {
 	cnftest.RunTests(t, "../spec/cases", cnftest.Harness{
 		Convert: convert,
-		Assert:  assert,
+		Check:   check,
 	})
 }
 
@@ -70,7 +70,7 @@ func convert(direction, source string, reformat cnftest.Reformat) (string, error
 // layout. A cnf exact-value kind compares on the value: both
 // sides translate back to JSON, where the spelling choices the
 // two from-json readings may make differently disappear.
-func assert(format, kind, want, got string) error {
+func check(format, kind, want, got string) error {
 	if format == "json" {
 		want, got = trimJSON(want), trimJSON(got)
 	}

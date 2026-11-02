@@ -46,14 +46,14 @@ type Harness struct {
 	// does not run returns a Skip.
 	Convert func(direction, source string, reformat Reformat) (string, error)
 
-	// Assert decides whether a direction's output matches
+	// Check decides whether a direction's output matches
 	// its expectation, both in the direction's target format:
 	// "json", "cnf", or "ast". The kind is the directive's -
 	// the comparison is per-harness, so the kind routing
 	// lives here. A nil return means equal; a non-nil error
 	// is the mismatch report, printed under the direction's
 	// name.
-	Assert func(format, kind, want, got string) error
+	Check func(format, kind, want, got string) error
 }
 
 // RunTests runs the corpus against one harness: every case of
@@ -109,7 +109,7 @@ func runCaseOn(r recorder, name string, c *Case, h Harness) {
 
 // runDirectionOn executes one direction of one case: the
 // inputs through the harness's Convert, the outputs against
-// the first expectation block through its Assert. Every
+// the first expectation block through its Check. Every
 // diagnostic carries the case's name and the direction, so a
 // line grepped out of the run still names its case. It
 // reports whether the direction ran - false when the harness
@@ -192,7 +192,7 @@ func runDirectionOn(r recorder, name string, c *Case, dir string, d Directive, h
 			r.Errorf("%s: %s: %s block #%d: %s", name, dir, sourceName(dir), i+1, err)
 			continue
 		}
-		if aerr := h.Assert(formatName(dir), d.Kind, want, got); aerr != nil {
+		if aerr := h.Check(formatName(dir), d.Kind, want, got); aerr != nil {
 			r.Errorf("%s: %s: %s block #%d: %s", name, dir, sourceName(dir), i+1, aerr)
 		}
 	}

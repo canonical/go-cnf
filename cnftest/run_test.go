@@ -35,7 +35,7 @@ type HarnessTest struct {
 
 // The fake harness the dispatcher tests use: Convert echoes
 // its source, or fails with a message naming it, or skips a
-// direction; Assert compares verbatim, reporting the texts
+// direction; Check compares verbatim, reporting the texts
 // on mismatch. The rows pin the dispatcher's plumbing, not
 // any real format's conversion or equality.
 var fake = Harness{
@@ -46,7 +46,7 @@ var fake = Harness{
 		}
 		return src, nil
 	},
-	Assert: func(format, kind, want, got string) error {
+	Check: func(format, kind, want, got string) error {
 		if strings.TrimSuffix(got, "\n") != strings.TrimSuffix(want, "\n") {
 			return fmt.Errorf("mismatch:\n  got  %q\n  want %q", got, want)
 		}

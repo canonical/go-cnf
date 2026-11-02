@@ -32,7 +32,7 @@ import (
 func TestCases(t *testing.T) {
 	cnftest.RunTests(t, "../spec/cases", cnftest.Harness{
 		Convert: convert,
-		Assert:  assert,
+		Check:   check,
 	})
 }
 
@@ -84,7 +84,7 @@ func convert(direction, source string, reformat cnftest.Reformat) (string, error
 // value kind re-parses both sides and matches the ASTs, since
 // the rendered spelling may normalize layout the AST does not
 // record.
-func assert(format, kind, want, got string) error {
+func check(format, kind, want, got string) error {
 	switch format {
 	case "ast":
 		if strings.TrimSuffix(got, "\n") != strings.TrimSuffix(want, "\n") {
