@@ -26,6 +26,9 @@ type RenderOptions struct{}
 
 // Render renders the provided hierarchy as cnf text.
 func Render(root *Item, opts *RenderOptions) ([]byte, error) {
+	if err := checkConflicts(root); err != nil {
+		return nil, err
+	}
 	var b strings.Builder
 	// The root value is a keyless item; its comment runs render around it.
 	writeCmt(&b, root.PreCmt, "")
@@ -610,8 +613,8 @@ func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 }
 
 // quoteString writes one string in the asked family, never failing:
-// resolveQuote escalates any ask that cannot hold it. force is value
-// position: a bare word is never read back, so its spelling is skipped.
+// resolveQuote escalates any ask that cannot hold it. When force is
+// the unquoted strings are always promoted to quoted.
 func quoteString(b *strings.Builder, s string, q QuoteKind, force bool) {
 	q = resolveQuote(s, q, false)
 	if force && q == Unquoted {

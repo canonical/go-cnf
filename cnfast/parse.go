@@ -114,9 +114,11 @@ func Escape(s string) string {
 	return b.String()
 }
 
-// keyPath spells one key path for an error message: dot-joined
-// segments inside backquotes, each in its recorded quote style.
-func keyPath(key []*Str) string {
+// quoteKeyPath force-quotes a key path for an error message.
+func quoteKeyPath(key []*Str) string {
+	if len(key) == 1 {
+		return quoteKey(key[0])
+	}
 	var b strings.Builder
 	b.WriteString("`")
 	for i, k := range key {
@@ -461,7 +463,7 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 	if text == "" {
 		next, ok := p.peekStruct(ln.indent)
 		if !ok || len(next.indent) <= len(ln.indent) {
-			return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+			return nil, errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 		}
 		// The block's shape is decided by its first line: a
 		// "- " item opens a list, a fence delimiter a fence,
@@ -582,7 +584,7 @@ func (p *parser) parseBlockList(owner *Item, prefix string) (*List, error) {
 			if text == "" {
 				// The inlinepair form ends on its colon: the same
 				// omission parseItem raises.
-				return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+				return nil, errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 			}
 		}
 		val, in, err := p.parseInline(ln, text)

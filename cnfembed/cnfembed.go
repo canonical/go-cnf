@@ -84,7 +84,7 @@ func (scope *keyNode) walk(path []*keyNode) (*keyNode, error) {
 			node = &keyNode{key: seg.key, quote: seg.quote, pos: seg.pos, sub: []*keyNode{}}
 			scope.sub = append(scope.sub, node)
 		} else if node.json != "" || node.list {
-			return nil, errAt(seg.pos, fmt.Sprintf("cannot redefine previous key `%s`", node.key))
+			return nil, errAt(seg.pos, "cannot redefine previous key "+quoteKey(node))
 		}
 		scope = node
 	}
@@ -101,7 +101,7 @@ func (scope *keyNode) define(path []*keyNode, val *keyNode) error {
 	}
 	tip := path[len(path)-1]
 	if parent.find(tip.key) != nil {
-		return redefinePath(path)
+		return redefinePath(tip)
 	}
 	parent.sub = append(parent.sub, &keyNode{
 		key: tip.key, quote: tip.quote, pos: tip.pos,
@@ -124,23 +124,30 @@ func (scope *keyNode) expand(path []*keyNode) (*keyNode, error) {
 		node = &keyNode{key: tip.key, quote: tip.quote, pos: tip.pos, sub: []*keyNode{}}
 		parent.sub = append(parent.sub, node)
 	} else if node.json != "" || node.list {
-		return nil, redefinePath(path)
+		return nil, redefinePath(tip)
 	} else if node.expanded {
-		return nil, expandPathErr(path)
+		return nil, expandPathErr(tip)
 	}
 	node.expanded = true
 	return node, nil
 }
 
-// redefinePath reports a second definition, the path spelled
-// in full and anchored at its first segment.
-func redefinePath(path []*keyNode) error {
-	return errAt(path[0].pos, "cannot redefine previous key "+keyPath(path))
+// redefinePath reports a second definition, anchored at the
+// redefining segment and naming that segment alone: `b`,
+// not the path that reaches it.
+func redefinePath(seg *keyNode) error {
+	return errAt(seg.pos, "cannot redefine previous key "+quoteKey(seg))
 }
 
-// expandPathErr reports a map key's second expansion.
-func expandPathErr(path []*keyNode) error {
-	return errAt(path[0].pos, "cannot expand map key "+keyPath(path)+" more than once")
+// expandPathErr reports a map key's second expansion, anchored
+// at the re-expanding segment and naming that segment alone.
+func expandPathErr(seg *keyNode) error {
+	return errAt(seg.pos, "cannot expand map key "+quoteKey(seg)+" more than once")
+}
+
+// quoteKey force-quotes one key segment for an error message.
+func quoteKey(seg *keyNode) string {
+	return quote(seg.key, seg.quote, true)
 }
 
 // wrapPath wraps a keyed element's path around its value:
@@ -259,17 +266,18 @@ func errAtScan(p pos, text string, scanErr error) error {
 	return errAt(pos{L: l, C: c}, serr.msg)
 }
 
-// keyPath spells one key path for an error message: dot-
-// joined segments inside backquotes, each in its recorded
-// quote style. `a` and `a."b"` are how the forms look.
-func keyPath(path []*keyNode) string {
+// quoteKeyPath force-quotes a key path for an error message.
+func quoteKeyPath(path []*keyNode) string {
+	if len(path) == 1 {
+		return quoteKey(path[0])
+	}
 	var b strings.Builder
 	b.WriteString("`")
 	for i, k := range path {
 		if i > 0 {
 			b.WriteString(".")
 		}
-		b.WriteString(quote(k.key, k.quote))
+		b.WriteString(quote(k.key, k.quote, false))
 	}
 	b.WriteString("`")
 	return b.String()
@@ -345,9 +353,10 @@ func parse(data []byte) (*keyNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The whole document parsed: the first key conflict, if
-	// one was recorded along the way, is the answer now.
-	return root, p.first
+	if p.first != nil {
+		return nil, p.first
+	}
+	return root, nil
 }
 
 // invalidUTF8Err locates the first invalid byte in data and
@@ -581,7 +590,7 @@ func (p *parser) parseItem(ln line, scope *keyNode) error {
 	}
 	next, ok := p.peekStruct(ln.indent)
 	if !ok || len(next.indent) <= len(ln.indent) {
-		return errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+		return errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 	}
 	switch {
 	case isListItem(next.text):
@@ -671,7 +680,7 @@ func (p *parser) parseBlockList(prefix string) (*keyNode, error) {
 			if text == "" {
 				// A path ending on its colon: the same omission
 				// parseItem reports.
-				return nil, errAt(indentPos(ln), "cannot omit the value for "+keyPath(path))
+				return nil, errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 			}
 		}
 		val, err := p.parseInline(ln, text)
@@ -1515,12 +1524,12 @@ func baseToDecimal(digits string, base int) string {
 // The cnf quote spelling, for the error messages that name a key path.
 //
 
-// quote returns s quoted and escaped in the q family - one
-// of the three families a key segment can hold.
-func quote(s string, q quoteKind) string {
+// quote returns s in the q family or an alternate if that's not possible.
+// When force is set, unquoted strings are always promoted to quoted.
+func quote(s string, q quoteKind, force bool) string {
 	switch q {
 	case unquoted:
-		if isBareWord(s) {
+		if !force && isBareWord(s) {
 			return s
 		}
 		q = doubleQuoted

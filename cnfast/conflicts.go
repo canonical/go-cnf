@@ -15,11 +15,19 @@
 
 package cnfast
 
-// The expansion tracking: no map key is expanded twice, and no key is
-// defined both as a map and as a non-map - paths traversing their prefix
-// are the one exemption. The check walks the built AST with a trie, one
-// level per map scope; a level is shared by the map it expands, so
-// later converging paths read the history the descent wrote.
+import "strings"
+
+// quoteKey force-quotes one key segment for an error message.
+func quoteKey(s *Str) string {
+	var b strings.Builder
+	quoteString(&b, s.Data, s.Quote, true)
+	return b.String()
+}
+
+// The expansion tracking: no map key is expanded twice, and no key
+// is defined both as a map and as a non-map. Reaching through a
+// non-map is a redefinition; the check walks the built AST with a
+// trie, a level per map scope, shared with the map it expands.
 
 // A trackedKey is the history of one key at one map scope.
 type trackedKey struct {
@@ -94,10 +102,9 @@ func checkMapConflicts(m *Map, lastValues trackedMap) error {
 	return nil
 }
 
-// trackKey walks one item's key path through the trie, conflict telling
-// whether the item defines a non-map. Non-tip segments are never errors;
-// at the tip, a map over a prior expansion, or any second definition,
-// is a redefinition.
+// trackKey walks one item's key path through the trie, conflict
+// telling whether the item defines a non-map. Descending past a
+// non-map, or redefining at the tip, is the error.
 func trackKey(lastValues trackedMap, key []*Str, conflict bool) (trackedMap, error) {
 	nextKey, seen := lastValues[key[0].Data]
 	if !seen {
@@ -105,21 +112,24 @@ func trackKey(lastValues trackedMap, key []*Str, conflict bool) (trackedMap, err
 		lastValues[key[0].Data] = nextKey
 	}
 	if len(key) > 1 {
+		if nextKey.conflict {
+			return nil, errAt(key[0].Pos, "cannot redefine previous key "+quoteKey(key[0]))
+		}
 		return trackKey(nextKey.values, key[1:], conflict)
 	}
 	if !conflict {
 		if nextKey.expanded {
-			return nil, errAt(key[0].Pos, "cannot expand map key "+keyPath(key)+" more than once")
+			return nil, errAt(key[0].Pos, "cannot expand map key "+quoteKey(key[0])+" more than once")
 		}
 		if nextKey.conflict {
-			return nil, errAt(key[0].Pos, "cannot redefine previous key "+keyPath(key))
+			return nil, errAt(key[0].Pos, "cannot redefine previous key "+quoteKey(key[0]))
 		}
 		nextKey.expanded = true
 		lastValues[key[0].Data] = nextKey
 		return nextKey.values, nil
 	}
 	if seen {
-		return nil, errAt(key[0].Pos, "cannot redefine previous key "+keyPath(key))
+		return nil, errAt(key[0].Pos, "cannot redefine previous key "+quoteKey(key[0]))
 	}
 	nextKey.conflict = true
 	lastValues[key[0].Data] = nextKey
