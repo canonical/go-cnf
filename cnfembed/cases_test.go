@@ -65,22 +65,6 @@ func check(format, kind, want, got string) error {
 	return nil
 }
 
-// trimJSON trims leading and trailing whitespace from each line
-// of a JSON text and joins them into a single compact string,
-// allowing case files to use pretty-printed JSON while cnfembed
-// emits compact JSON.
-func trimJSON(text string) string {
-	lines := strings.Split(text, "\n")
-	var out []string
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if ln != "" {
-			out = append(out, ln)
-		}
-	}
-	return strings.Join(out, "")
-}
-
 // mismatch reports one failed comparison.
 func mismatch(want, got string) error {
 	return fmt.Errorf("mismatch:\nwant:\n%s\ngot:\n%s", want, got)
