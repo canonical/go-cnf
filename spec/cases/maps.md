@@ -1408,6 +1408,85 @@ a:
 ```
 
 
+## Case: block-indents-tab-shallower-error
+
+A tab prefix under a space-indented parent it cannot out-count names the mix, not the pair above it.
+
+```
+to-json: "error"
+to-ast: "error"
+error: "3:2: cannot mix indentation prefixes"
+```
+
+### cnf
+
+```
+a:
+    b:
+	c: 1
+```
+
+
+## Case: block-indents-tab-deeper-error
+
+A tab prefix under a space-indented parent it out-counts is a mix all the same: the kinds may not diverge inside one top-level value.
+
+```
+to-json: "error"
+to-ast: "error"
+error: "3:3: cannot mix indentation prefixes"
+```
+
+### cnf
+
+```
+a:
+ b:
+		c: 1
+```
+
+
+## Case: block-indents-tab-render-error
+
+The tree the tab-mixed document would parse into, had the parse accepted it: the render refuses it too, anchored where the parse names the same mix.
+
+```
+from-ast: "error"
+error: "3:3: cannot mix indentation prefixes"
+```
+
+### ast
+
+```
+{
+    "value": {
+        "map": [{
+            "key": [{"str":"a","pos":{"l":1,"c":1}}],
+            "value": {
+                "map": [{
+                    "key": [{"str":"b","pos":{"l":2,"c":2}}],
+                    "value": {
+                        "map": [{
+                            "key": [{"str":"c","pos":{"l":3,"c":3}}],
+                            "value": {"num":"1","pos":{"l":3,"c":6}}
+                        }],
+                        "block": true,
+                        "pos": {"l":3,"c":3}
+                    },
+                    "indent": "\t"
+                }],
+                "block": true,
+                "pos": {"l":2,"c":2}
+            },
+            "indent": " "
+        }],
+        "block": true,
+        "pos": {"l":1,"c":1}
+    }
+}
+```
+
+
 ## Case: block-unindented-error
 
 A block value must indent under its key: a fence, list fence, or

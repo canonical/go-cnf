@@ -18,6 +18,10 @@
 // possible. This layout makes it optimal for copying and embedding into
 // projects that would like to use cnf for reading configuration files but
 // would rather not add an additional external dependency.
+//
+// References:
+// - The format specification: https://github.com/canonical/cnf
+// - The source implementation: https://github.com/canonical/go-cnf
 package cnfembed
 
 import (
@@ -589,6 +593,9 @@ func (p *parser) parseItem(ln line, scope *keyNode) error {
 		return trailing(ln, rest)
 	}
 	next, ok := p.peekStruct(ln.indent)
+	if ok && ln.indent != "" && !sameIndentChar(next.indent, ln.indent[0]) {
+		return errAt(indentPos(next), "cannot mix indentation prefixes")
+	}
 	if !ok || len(next.indent) <= len(ln.indent) {
 		return errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 	}

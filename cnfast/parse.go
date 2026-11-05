@@ -462,6 +462,9 @@ func (p *parser) parseItem(ln line) (*Item, error) {
 	var in Cmt
 	if text == "" {
 		next, ok := p.peekStruct(ln.indent)
+		if ok && ln.indent != "" && !sameIndentChar(next.indent, ln.indent[0]) {
+			return nil, errAt(indentPos(next), "cannot mix indentation prefixes")
+		}
 		if !ok || len(next.indent) <= len(ln.indent) {
 			return nil, errAt(indentPos(ln), "cannot omit the value for "+quoteKeyPath(path))
 		}

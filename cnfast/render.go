@@ -78,6 +78,9 @@ func isBlock(v Value) bool {
 // carrying the form: a map renders its pairs, a list its items or ---
 // delimiters, a string its fence.
 func writeBlock(b *strings.Builder, v Value, indent string, head, foot Cmt) error {
+	if indent != "" && !sameIndentChar(indent, indent[0]) {
+		return errAt(blockPos(v), "cannot mix indentation prefixes")
+	}
 	switch n := v.(type) {
 	case *Map:
 		return writeMap(b, n, indent, head, foot)
@@ -88,6 +91,19 @@ func writeBlock(b *strings.Builder, v Value, indent string, head, foot Cmt) erro
 	}
 
 	return fmt.Errorf("cannot render %T as a block", v)
+}
+
+// blockPos is the first line of a block value, where its prefix begins.
+func blockPos(v Value) Pos {
+	switch n := v.(type) {
+	case *Map:
+		return n.Pos
+	case *List:
+		return n.Pos
+	case *Str:
+		return n.Pos
+	}
+	return Pos{}
 }
 
 // writeStr writes one string in the asked layout: bare, quoted, compact
