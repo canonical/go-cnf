@@ -1,9 +1,9 @@
 
-# Go implementation of the cnf format
+# Go support for the _cnf_ format
 
-## Packages 
- 
-- [go-cnf/cnfast](https://pkg.go.dev/github.com/canonical/go-cnf/cnfast) - Original AST parser and renderer built during development. 
+## Packages
+
+- [go-cnf/cnfast](https://pkg.go.dev/github.com/canonical/go-cnf/cnfast) - Original AST parser and renderer built during spec development. 
 - [go-cnf/cnfpretty](https://pkg.go.dev/github.com/canonical/go-cnf/cnfpretty) - Pretty printer for cnfast. 
 - [go-cnf/cnfjson](https://pkg.go.dev/github.com/canonical/go-cnf/cnfjson) - Text-preserving bridge between cnf and json. 
 - [go-cnf/cnfembed](https://pkg.go.dev/github.com/canonical/go-cnf/cnfembed) - Text-preserving cnf to json, self-contained file for embedding.
@@ -12,7 +12,7 @@
 
 ## Specification
 
-Consult the [full specification](https://github.com/canonical/cnf) for examples and details of the format.
+Consult the [full specification](https://github.com/canonical/cnf) for examples and details of the _cnf_ format.
 
 ## Example
 
