@@ -1,6 +1,7 @@
 
 # Go support for the _cnf_ format
 
+
 ## Packages
 
 - [go-cnf/cnfast](https://pkg.go.dev/github.com/canonical/go-cnf/cnfast) - Original AST parser and renderer built during spec development. 
@@ -10,9 +11,25 @@
 - [go-cnf/cnfmap](https://pkg.go.dev/github.com/canonical/go-cnf/cnfmap) - Simple Marshaler and Unmarshaler for Go values. 
 - [go-cnf/cnftest](https://pkg.go.dev/github.com/canonical/go-cnf/cnftest) - Harness to run the conformance tests.
 
+
 ## Specification
 
 Consult the [full specification](https://github.com/canonical/cnf) for examples and details of the _cnf_ format.
+
+
+## Performance
+
+The following table offers a vague data point on the performance of the
+implementation. It's as fair as I could make it: the two documents spell
+the same data in the same indentation shape. Both documents decode to the
+identical tree: 6721 maps, 11833 lists, 24605 scalars.
+
+| Test                                     | Parser                   | Best (ms) |  MB/s |
+|------------------------------------------|--------------------------|----------:|------:|
+| yaml => map (`yaml.Unmarshal`)           | gopkg.in/yaml.v3         |      45.2 | 23.79 |
+| cnf => json (`ToJSON`)                   | cnfembed                 |      18.3 | 88.06 |
+| cnf => map (`ToJSON` + `json.Unmarshal`) | cnfembed + encoding/json |      27.0 | 59.78 |
+
 
 ## Example
 
