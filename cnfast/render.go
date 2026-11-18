@@ -611,9 +611,10 @@ func resolveQuote(s string, q QuoteKind, block bool) QuoteKind {
 			break
 		}
 		// The block raw family holds newlines but cannot mark a missing
-		// final one, and a content line equal to the delimiter would
-		// close the fence early.
-		if !strings.HasSuffix(s, "\n") {
+		// final one, nor a carriage return ending a line - the parse
+		// reads it as part of a CRLF - and a content line equal to the
+		// delimiter would close the fence early.
+		if !strings.HasSuffix(s, "\n") || strings.Contains(s, "\r\n") {
 			q = DoubleFenced
 			break
 		}

@@ -220,6 +220,15 @@ func TestWriteStrClosingLine(t *testing.T) {
 		block: true,
 		want:  "    \"\"\"\n    one\n    '''\n    two\n    \"\"\"\n",
 	}, {
+		// A raw-family value with a line ending in a
+		// carriage return: the parse would read it as a
+		// CRLF, so the render escalates to the escaped
+		// family, which spells it.
+		str:   "one\r\ntwo\n",
+		quote: SingleFenced,
+		block: true,
+		want:  "    \"\"\"\n    one\\r\n    two\n    \"\"\"\n",
+	}, {
 		// A compact record (one element, no tail)
 		// demanded as a block: the content respells, a
 		// marker holding the value's missing final
