@@ -567,6 +567,27 @@ func escapeDoubleFenced(b *strings.Builder, s string) {
 	}
 }
 
+// escapeCompactFence spells s inside a one-line double fence, whose
+// first raw """ closes: a quote that would complete a run of three
+// is escaped, and so is a final one, which would run into the close.
+func escapeCompactFence(b *strings.Builder, s string) {
+	run := 0
+	for i, r := range s {
+		if r != '"' {
+			run = 0
+			b.WriteString(escapeRune(r))
+			continue
+		}
+		if run == 2 || i == len(s)-1 {
+			run = 0
+			b.WriteString(`\"`)
+			continue
+		}
+		run++
+		b.WriteRune(r)
+	}
+}
+
 // escapeDouble spells s inside a double-quoted string: the
 // closed escape set, the quote and the backslash escaped.
 func escapeDouble(b *strings.Builder, s string) {
@@ -660,15 +681,8 @@ func quoteString(b *strings.Builder, s string, q QuoteKind, force bool) {
 		b.WriteString(s)
 		b.WriteString("'''")
 	case DoubleFenced:
-		// A final raw quote would run into the closing delimiter, so it
-		// is escaped - the off-band tail of the compact close.
-		body, tail := s, ""
-		if strings.HasSuffix(s, `"`) {
-			body, tail = s[:len(s)-1], `\"`
-		}
 		b.WriteString(`"""`)
-		escapeDoubleFenced(b, body)
-		b.WriteString(tail)
+		escapeCompactFence(b, s)
 		b.WriteString(`"""`)
 	}
 }
