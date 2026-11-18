@@ -594,14 +594,25 @@ func (p Options) hasOuterCmts(item *cnfast.Item) bool {
 	if p.IgnoreComments {
 		return false
 	}
-	return len(item.PreCmt.Text) > 0 || len(item.PostCmt.Text) > 0 || len(item.InCmt.Text) > 0
+	return hasText(item.PreCmt) || hasText(item.PostCmt) || hasText(item.InCmt)
 }
 
 func (p Options) hasInnerCmts(item *cnfast.Item) bool {
 	if p.IgnoreComments {
 		return false
 	}
-	return len(item.HeadCmt.Text) > 0 || len(item.FootCmt.Text) > 0
+	return hasText(item.HeadCmt) || hasText(item.FootCmt)
+}
+
+// hasText reports whether a run holds a comment. A run of blank lines
+// is layout the inline form drops, not a comment it would lose.
+func hasText(c cnfast.Cmt) bool {
+	for _, ln := range c.Text {
+		if ln != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // foldPathItem folds one item's key line into the output map,
@@ -616,8 +627,11 @@ func (p Options) hasInnerCmts(item *cnfast.Item) bool {
 // never splits a dotted segment.
 func (p Options) foldPathItem(out *cnfast.Map, item *cnfast.Item, prefix []*cnfast.Str, root int) error {
 	lo, hi := p.pathRange()
-	// Pre/Post comments on item prevent the fold to avoid loss.
-	outerCmts := p.hasOuterCmts(item)
+	// Comments on an item whose block map would be absorbed prevent the
+	// fold to avoid loss; any other value only grows its key, the
+	// comments staying with it.
+	absorbs, _ := item.Value.(*cnfast.Map)
+	outerCmts := p.hasOuterCmts(item) && absorbs != nil && absorbs.Block
 	key := append(append([]*cnfast.Str{}, prefix...), item.Key...)
 	for {
 		if end := root + len(key) - 1; end < lo || end > hi || outerCmts {

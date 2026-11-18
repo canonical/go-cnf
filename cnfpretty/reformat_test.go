@@ -242,3 +242,37 @@ func decodeStr(t *testing.T, s *cnfast.Str) string {
 	}
 	return ast.Value.(*cnfast.Str).Data
 }
+
+// TestFoldInOnePass pins folds that a second pass used to finish: blank
+// lines are layout, not comments, so they never hold a fold back, and a
+// trailing comment on a scalar pair rides along as its key grows.
+func TestFoldInOnePass(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		opts Options
+		want string
+	}{
+		{"0:\n\n\n 0: 0\n", Options{FoldMapUptoItems: 2}, "{0: {0: 0}}\n"},
+		{"a:\n\n    b: 1\n\n    c: 2\n", Options{FoldMapUptoItems: 2}, "{a: {b: 1, c: 2}}\n"},
+		{"0:\n    0: 0\n    1: 0 # c\n", Options{FoldPathUptoDepth: 6, FoldMapUptoItems: 4}, "0.0: 0\n0.1: 0 # c\n"},
+	} {
+		for pass := 1; pass <= 2; pass++ {
+			src := tc.src
+			if pass == 2 {
+				src = tc.want
+			}
+			root, err := cnfast.Parse([]byte(src), nil)
+			if err != nil {
+				t.Fatalf("parse %q: %s", src, err)
+			}
+			opts := tc.opts
+			if err := Apply(root, &opts); err != nil {
+				t.Fatalf("apply %q: %s", src, err)
+			}
+			out, err := cnfast.Render(root, nil)
+			if err != nil || string(out) != tc.want {
+				t.Errorf("pass %d over %q = %q, %v; want %q", pass, src, out, err, tc.want)
+			}
+		}
+	}
+}
