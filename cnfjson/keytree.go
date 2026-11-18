@@ -36,23 +36,58 @@ import (
 //     with no mixed paths.
 type keyTree struct {
 	key  string       // the segment text, the quote style dissolved
-	sub  []*keyTree   // the children: expansions and paths below
+	sub  keyLevel     // the children: expansions and paths below
 	item *cnfast.Item // the non-map definition tipping here, if one did
+}
+
+// A keyLevel is one level of the keyTree: its nodes in document
+// order, indexed by key once the level is wide.
+type keyLevel struct {
+	nodes []*keyTree
+	index map[string]*keyTree
+}
+
+// indexFrom is the width past which a level indexes its keys: a
+// linear search is cheaper on the narrow maps most documents hold,
+// and quadratic on wide ones.
+const indexFrom = 16
+
+func (l *keyLevel) find(key string) *keyTree {
+	if l.index != nil {
+		return l.index[key]
+	}
+	for _, n := range l.nodes {
+		if n.key == key {
+			return n
+		}
+	}
+	return nil
+}
+
+func (l *keyLevel) add(node *keyTree) {
+	l.nodes = append(l.nodes, node)
+	switch {
+	case l.index != nil:
+		l.index[node.key] = node
+	case len(l.nodes) > indexFrom:
+		l.index = make(map[string]*keyTree, len(l.nodes))
+		for _, n := range l.nodes {
+			l.index[n.key] = n
+		}
+	}
 }
 
 // keyTreeFor collects one map's item list into its keyTree,
 // in document order: the item that first names a key holds
 // its node, later items expanding or descending through it.
 func keyTreeFor(m *cnfast.Map) ([]*keyTree, error) {
-	var nodes []*keyTree
+	var level keyLevel
 	for _, item := range m.Items {
-		var err error
-		nodes, err = placeKey(nodes, item.Key, item)
-		if err != nil {
+		if err := placeKey(&level, item.Key, item); err != nil {
 			return nil, err
 		}
 	}
-	return nodes, nil
+	return level.nodes, nil
 }
 
 // placeKey dissolves one item into the node list: the key's
@@ -60,46 +95,39 @@ func keyTreeFor(m *cnfast.Map) ([]*keyTree, error) {
 // go, and the item lands at the tip - a map value expanding
 // into the tip's children, the walk dissolving them the same
 // way, a non-map value recorded as the tip's item.
-func placeKey(nodes []*keyTree, key []*cnfast.Str, item *cnfast.Item) ([]*keyTree, error) {
+func placeKey(level *keyLevel, key []*cnfast.Str, item *cnfast.Item) error {
 	if len(key) == 0 {
-		return nodes, nil
+		return nil
 	}
-	node, pos := findKey(nodes, key[0].Data)
-	if pos < 0 {
+	node := level.find(key[0].Data)
+	if node == nil {
 		node = &keyTree{key: key[0].Data}
-		nodes = append(nodes, node)
+		level.add(node)
 	}
 	if len(key) > 1 {
 		// A path descending: only a non-map definition blocks
 		// it, a map holding it open however it was spelled.
 		if node.item != nil {
-			return nodes, redefined(node, key[0])
+			return redefined(node, key[0])
 		}
-		sub, err := placeKey(node.sub, key[1:], item)
-		if err != nil {
-			return nodes, err
-		}
-		node.sub = sub
-		return nodes, nil
+		return placeKey(&node.sub, key[1:], item)
 	}
 	if sub, ok := item.Value.(*cnfast.Map); ok {
 		if node.item != nil {
-			return nodes, redefined(node, key[0])
+			return redefined(node, key[0])
 		}
 		for _, it := range sub.Items {
-			var err error
-			node.sub, err = placeKey(node.sub, it.Key, it)
-			if err != nil {
-				return nodes, err
+			if err := placeKey(&node.sub, it.Key, it); err != nil {
+				return err
 			}
 		}
-		return nodes, nil
+		return nil
 	}
-	if node.item != nil || node.sub != nil {
-		return nodes, redefined(node, key[0])
+	if node.item != nil || len(node.sub.nodes) > 0 {
+		return redefined(node, key[0])
 	}
 	node.item = item
-	return nodes, nil
+	return nil
 }
 
 // redefined reports one key's second definition, the marker
@@ -112,16 +140,6 @@ func redefined(node *keyTree, seg *cnfast.Str) error {
 		return fmt.Errorf("%s", msg)
 	}
 	return fmt.Errorf("%d:%d: %s", seg.Pos.L, seg.Pos.C, msg)
-}
-
-// findKey locates one segment's node in a level of the tree.
-func findKey(nodes []*keyTree, key string) (*keyTree, int) {
-	for i, n := range nodes {
-		if n.key == key {
-			return n, i
-		}
-	}
-	return nil, -1
 }
 
 // writeKeyTree writes one level of the keyTree as a JSON
@@ -140,8 +158,8 @@ func writeKeyTree(b *strings.Builder, nodes []*keyTree) error {
 		}
 		b.WriteString(":")
 		switch {
-		case len(node.sub) > 0:
-			if err := writeKeyTree(b, node.sub); err != nil {
+		case len(node.sub.nodes) > 0:
+			if err := writeKeyTree(b, node.sub.nodes); err != nil {
 				return err
 			}
 		case node.item != nil:

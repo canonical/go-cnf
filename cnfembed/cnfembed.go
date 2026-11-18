@@ -51,14 +51,15 @@ func ToJSON(data []byte, opts *Options) ([]byte, error) {
 // it: a map, a list, or a scalar's pre-encoded json. A bare
 // list element carries no key; a map's sub is never nil.
 type keyNode struct {
-	key      string     // the segment's decoded text; "" for a bare list element
-	quote    quoteKind  // the segment's quoting style, to spell it in errors
-	pos      pos        // where the segment was written
-	sub      []*keyNode // the map or list under this key
-	list     bool       // sub holds a list's elements, not a map's pairs
-	json     string     // the pre-encoded scalar value; "" = none
-	expanded bool       // a map was written here already, once only
-	offset   int        // the segment's offset within its scanned path
+	key      string              // the segment's decoded text; "" for a bare list element
+	quote    quoteKind           // the segment's quoting style, to spell it in errors
+	pos      pos                 // where the segment was written
+	sub      []*keyNode          // the map or list under this key
+	list     bool                // sub holds a list's elements, not a map's pairs
+	json     string              // the pre-encoded scalar value; "" = none
+	expanded bool                // a map was written here already, once only
+	offset   int                 // the segment's offset within its scanned path
+	index    map[string]*keyNode // a wide map's sub by key; nil while narrow
 }
 
 type quoteKind int
@@ -70,12 +71,34 @@ const (
 )
 
 func (n *keyNode) find(key string) *keyNode {
+	if n.index != nil {
+		return n.index[key]
+	}
 	for _, e := range n.sub {
 		if e.key == key {
 			return e
 		}
 	}
 	return nil
+}
+
+// indexFrom is the width past which a map indexes its keys: a
+// linear search is cheaper on the narrow maps most documents hold,
+// and quadratic on wide ones.
+const indexFrom = 16
+
+// add appends one pair to a map node.
+func (n *keyNode) add(e *keyNode) {
+	n.sub = append(n.sub, e)
+	switch {
+	case n.index != nil:
+		n.index[e.key] = e
+	case len(n.sub) > indexFrom:
+		n.index = make(map[string]*keyNode, len(n.sub))
+		for _, e := range n.sub {
+			n.index[e.key] = e
+		}
+	}
 }
 
 // walk descends the path's inner segments, creating
@@ -86,7 +109,7 @@ func (scope *keyNode) walk(path []*keyNode) (*keyNode, error) {
 		node := scope.find(seg.key)
 		if node == nil {
 			node = &keyNode{key: seg.key, quote: seg.quote, pos: seg.pos, sub: []*keyNode{}}
-			scope.sub = append(scope.sub, node)
+			scope.add(node)
 		} else if node.json != "" || node.list {
 			return nil, errAt(seg.pos, "cannot redefine previous key "+quoteKey(node))
 		}
@@ -107,9 +130,9 @@ func (scope *keyNode) define(path []*keyNode, val *keyNode) error {
 	if parent.find(tip.key) != nil {
 		return redefinePath(tip)
 	}
-	parent.sub = append(parent.sub, &keyNode{
+	parent.add(&keyNode{
 		key: tip.key, quote: tip.quote, pos: tip.pos,
-		json: val.json, list: val.list, sub: val.sub,
+		json: val.json, list: val.list, sub: val.sub, index: val.index,
 	})
 	return nil
 }
@@ -126,7 +149,7 @@ func (scope *keyNode) expand(path []*keyNode) (*keyNode, error) {
 	node := parent.find(tip.key)
 	if node == nil {
 		node = &keyNode{key: tip.key, quote: tip.quote, pos: tip.pos, sub: []*keyNode{}}
-		parent.sub = append(parent.sub, node)
+		parent.add(node)
 	} else if node.json != "" || node.list {
 		return nil, redefinePath(tip)
 	} else if node.expanded {
@@ -159,7 +182,7 @@ func quoteKey(seg *keyNode) string {
 func wrapPath(path []*keyNode, val *keyNode) *keyNode {
 	n := &keyNode{
 		key: path[len(path)-1].key, quote: path[len(path)-1].quote, pos: path[len(path)-1].pos,
-		json: val.json, list: val.list, sub: val.sub,
+		json: val.json, list: val.list, sub: val.sub, index: val.index,
 	}
 	for i := len(path) - 2; i >= 0; i-- {
 		n = &keyNode{
