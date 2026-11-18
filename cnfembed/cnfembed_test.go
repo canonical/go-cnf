@@ -189,6 +189,18 @@ var jsonStr = `
 `
 
 var cnfErrors = []struct{ cnf, error string }{{
+	cnf:   "a:\n\t b: 1\n",
+	error: "2:3: cannot mix indentation prefixes",
+}, {
+	cnf:   "a:\n \tb: 1\n",
+	error: "2:3: cannot mix indentation prefixes",
+}, {
+	cnf:   "---\n\t ---\n\t 1\n\t ---\n---\n",
+	error: "2:3: cannot mix indentation prefixes",
+}, {
+	cnf:   "a:\n    ---\n    \t ---\n    \t 1\n    \t ---\n    ---\n",
+	error: "3:7: cannot mix indentation prefixes",
+}, {
 	cnf:   `a: "x`,
 	error: "1:4: cannot find closing quote",
 }, {

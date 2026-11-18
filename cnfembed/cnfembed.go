@@ -593,7 +593,7 @@ func (p *parser) parseItem(ln line, scope *keyNode) error {
 		return trailing(ln, rest)
 	}
 	next, ok := p.peekStruct(ln.indent)
-	if ok && ln.indent != "" && !sameIndentChar(next.indent, ln.indent[0]) {
+	if ok && !sameIndentChar(next.indent, indentCharOf(ln.indent, next.indent)) {
 		return errAt(indentPos(next), "cannot mix indentation prefixes")
 	}
 	if !ok || len(next.indent) <= len(ln.indent) {
@@ -775,6 +775,18 @@ func (p *parser) parseFence(next line, delim string) (string, error) {
 	return "", errAt(indentPos(next), "cannot find closing fence")
 }
 
+// indentCharOf names the character a block's prefix must be made
+// of: its parent's, or at the top level its own first one.
+func indentCharOf(parent, prefix string) byte {
+	if parent != "" {
+		return parent[0]
+	}
+	if prefix != "" {
+		return prefix[0]
+	}
+	return ' '
+}
+
 // sameIndentChar reports whether the prefix consists solely
 // of the given indent character.
 func sameIndentChar(prefix string, c byte) bool {
@@ -855,6 +867,9 @@ func (p *parser) parseListFence(next line) (*keyNode, error) {
 		// line opens a nested block only as a list fence.
 		if first.indent != prefix && !(first.text == "---" && len(first.indent) > len(prefix)) {
 			return nil, errAt(indentPos(first), "list element indent must align with fence")
+		}
+		if !sameIndentChar(first.indent, indentCharOf(prefix, first.indent)) {
+			return nil, errAt(indentPos(first), "cannot mix indentation prefixes")
 		}
 		val, err := sub.parseBlockValue(first)
 		if err != nil {
