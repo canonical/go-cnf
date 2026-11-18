@@ -17,6 +17,8 @@ package cnfmap
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -109,11 +111,9 @@ func keyPath(item *cnfast.Item) []string {
 
 // parseNumber reads the cnf number spellings. All numbers are
 // IEEE754 doubles underneath. Decimal forms parse through
-// strconv; the other bases convert digit by digit, integers
-// within int64 keeping their exact value and wider ones
-// degrading to the nearest double rather than failing - the
-// spec's floor is double precision, and a small decoder meets
-// it without big-number machinery.
+// strconv; the other bases round once to the nearest double,
+// as a decimal spelling of the same value would, and like it
+// fail past the double range.
 func parseNumber(s string) (float64, error) {
 	sign := float64(1)
 	text := s
@@ -131,10 +131,6 @@ func parseNumber(s string) (float64, error) {
 		base, digits = 2, s[2:]
 	}
 	if base != 10 {
-		// Integers within int64 keep their exact value; wider
-		// ones degrade to the nearest float64 rather than
-		// failing - the spec's floor is double precision, and
-		// a tiny parser meets it without big-number machinery.
 		if digits == "" {
 			return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 		}
@@ -144,13 +140,17 @@ func parseNumber(s string) (float64, error) {
 		if n, err := strconv.ParseUint(digits, base, 64); err == nil {
 			return sign * float64(n), nil
 		}
-		var f float64
 		for _, c := range digits {
-			d := digitVal(c)
-			if d < 0 || d >= base {
+			if d := digitVal(c); d < 0 || d >= base {
 				return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 			}
-			f = f*float64(base) + float64(d)
+		}
+		// Past 64 bits: digit by digit would round at every step,
+		// drifting off the nearest double.
+		n, _ := new(big.Int).SetString(digits, base)
+		f, _ := new(big.Float).SetInt(n).Float64()
+		if math.IsInf(f, 0) {
+			return 0, fmt.Errorf("cannot decode number: %s is out of range for float64", text)
 		}
 		return sign * f, nil
 	}

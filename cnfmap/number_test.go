@@ -17,6 +17,7 @@ package cnfmap_test
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/canonical/go-cnf/cnfmap"
@@ -58,6 +59,15 @@ var unmarshalRangeTests = []struct {
 }, {
 	in:   "a: -1e309\n",
 	want: `cannot decode number: -1e309 is out of range for float64`,
+}, {
+	// past 64 bits, a based number rounds once to the nearest double,
+	// as its decimal spelling 129127208515966869520 does
+	in:   "a: 0x70000000000002010\n",
+	want: 1.2912720851596688e+20,
+}, {
+	// and fails past the double range, as a decimal spelling does
+	in:   "a: 0x1" + strings.Repeat("0", 256) + "\n",
+	want: "cannot decode number: 0x1" + strings.Repeat("0", 256) + " is out of range for float64",
 }}
 
 func TestUnmarshalRange(t *testing.T) {
