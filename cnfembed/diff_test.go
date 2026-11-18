@@ -17,7 +17,10 @@ package cnfembed_test
 
 import (
 	"fmt"
+	"math/big"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/canonical/go-cnf/cnfembed"
 	"github.com/canonical/go-cnf/cnfjson"
@@ -59,4 +62,27 @@ func TestDifferential(t *testing.T) {
 		}
 	}
 	t.Log("blocks checked:", n)
+}
+
+// TestWideBaseNumber pins the conversion of a wide non-decimal
+// number in both implementations: the value is exact, and the
+// time stays far below the seconds a quadratic conversion takes
+// at this width.
+func TestWideBaseNumber(t *testing.T) {
+	const zeros = 1 << 16
+	doc := []byte("a: 0x1" + strings.Repeat("0", zeros) + "\n")
+	want := `{"a":` + new(big.Int).Lsh(big.NewInt(1), 4*zeros).String() + `}`
+	for name, toJSON := range map[string]func([]byte) ([]byte, error){
+		"cnfembed": func(d []byte) ([]byte, error) { return cnfembed.ToJSON(d, nil) },
+		"cnfjson":  func(d []byte) ([]byte, error) { return cnfjson.ToJSON(d, nil) },
+	} {
+		start := time.Now()
+		got, err := toJSON(doc)
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("%s: took %s", name, elapsed)
+		}
+		if err != nil || string(got) != want {
+			t.Errorf("%s: wrong value, err %v", name, err)
+		}
+	}
 }
