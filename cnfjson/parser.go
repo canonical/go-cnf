@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/canonical/go-cnf/cnfast"
@@ -83,10 +84,14 @@ func walk(data []byte) (jval, error) {
 	if err != nil {
 		return jval{}, err
 	}
-	if _, err := dec.Token(); err == nil {
+	switch _, err := dec.Token(); err {
+	case io.EOF:
+		return val, nil
+	case nil:
 		return jval{}, fmt.Errorf("cannot parse trailing JSON values")
+	default:
+		return jval{}, fmt.Errorf("cannot parse trailing JSON content: %w", err)
 	}
-	return val, nil
 }
 
 func walkValue(dec *json.Decoder) (jval, error) {
