@@ -56,11 +56,29 @@ func TestSpell(t *testing.T) {
 		{`"""a'''b"""`, "a'''b", SingleFenced},                 // ''' cannot hold '''
 		{`"""Multi " and '"""`, `Multi " and '`, SingleFenced}, // nor a final quote
 
-		// the compact escaped close: the final quote escapes
+		// the compact escaped close: the final quote escapes, and so
+		// does any quote that would complete a raw """
 		{`"""it\""""`, `it"`, DoubleFenced},
+		{`"""\""""`, `"`, DoubleFenced},
+		{`"""""\""""`, `"""`, DoubleFenced},
+		{`"""""\"0"""`, `"""0`, DoubleFenced},
+		{`"""a""\"b"""`, `a"""b`, DoubleFenced},
+		{`"""a""\"""\"b"""`, `a""""""b`, DoubleFenced},
 	} {
 		if got := Quote(tc.str, tc.q); got != tc.want {
 			t.Errorf("Spell(%q, %d)=%q want %q", tc.str, tc.q, got, tc.want)
+		}
+		if tc.want == tc.str {
+			continue // a bare word, which spells keys, not values
+		}
+		doc := "a: " + tc.want + "\n"
+		item, err := Parse([]byte(doc), nil)
+		if err != nil {
+			t.Errorf("Spell(%q, %d) does not parse back: %v", tc.str, tc.q, err)
+			continue
+		}
+		if got := item.Value.(*Map).Items[0].Value.(*Str).Data; got != tc.str {
+			t.Errorf("Spell(%q, %d) parses back as %q", tc.str, tc.q, got)
 		}
 	}
 }
