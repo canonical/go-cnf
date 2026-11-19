@@ -88,7 +88,7 @@ func (scope *keyNode) walk(path []*keyNode) (*keyNode, error) {
 			node = &keyNode{key: seg.key, quote: seg.quote, pos: seg.pos, sub: []*keyNode{}}
 			scope.sub = append(scope.sub, node)
 		} else if node.json != "" || node.list {
-			return nil, errAt(seg.pos, "cannot redefine previous key "+quoteKey(node))
+			return nil, errAt(seg.pos, "cannot redefine previous key "+quoteKey(seg))
 		}
 		scope = node
 	}

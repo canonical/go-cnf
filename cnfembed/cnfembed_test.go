@@ -189,6 +189,10 @@ var jsonStr = `
 `
 
 var cnfErrors = []struct{ cnf, error string }{{
+	// The message spells the redefining key, not the one it collides with.
+	cnf:   "\"a\": 1\n'a'.b: 2\n",
+	error: "2:1: cannot redefine previous key 'a'",
+}, {
 	cnf:   `a: "x`,
 	error: "1:4: cannot find closing quote",
 }, {
