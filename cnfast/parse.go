@@ -220,12 +220,23 @@ func (p *parser) parseTop() (*Item, error) {
 // looksLikeItem is a cheap check for a "path: value" line;
 // the real scan names the path, not the value, on a bad line.
 func looksLikeItem(text string) bool {
-	i := strings.IndexByte(text, ':')
-	if i <= 0 {
+	if strings.IndexByte(text, ':') <= 0 || isListItem(text) {
 		return false
 	}
-	c := text[0]
-	return c == '"' || c == '\'' || c == '.' || isBareRune(rune(c))
+	var rest string
+	var err error
+	switch c := text[0]; {
+	case c == '"':
+		_, rest, err = scanDoubleQuoted(text)
+	case c == '\'':
+		_, rest, err = scanSingleQuoted(text)
+	default:
+		return c == '.' || isBareRune(rune(c))
+	}
+	// A quoted key runs into its path or separator; a quoted value
+	// may hold a colon of its own. An unclosed quote reads as a key,
+	// so the error names the path.
+	return err != nil || strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, ".")
 }
 
 // parseMap reads one block map's pairs at the exact prefix. A run splits

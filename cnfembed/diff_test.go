@@ -60,3 +60,31 @@ func TestDifferential(t *testing.T) {
 	}
 	t.Log("blocks checked:", n)
 }
+
+// TestTopLevelValueShape pins top-level values that hold a colon:
+// a dashed list whose first item does, and a quoted string. Only a
+// key followed by its separator opens a map.
+func TestTopLevelValueShape(t *testing.T) {
+	for _, tc := range []struct{ cnf, json string }{
+		{"- {a: 1}\n", `[{"a":1}]`},
+		{"- a: 1\n", `[{"a":1}]`},
+		{"- \"x: y\"\n- 2\n", `["x: y",2]`},
+		{"- [1, {a: 2}]\n", `[[1,{"a":2}]]`},
+		{"\":\"\n", `":"`},
+		{"'a:b'\n", `"a:b"`},
+		{"---\n\"a:b\"\n---\n", `["a:b"]`},
+		{"\"a\": 1\n", `{"a":1}`},
+		{"'a'.\"b\": 1\n", `{"a":{"b":1}}`},
+		{"-a: 1\n", `{"-a":1}`},
+	} {
+		for name, toJSON := range map[string]func([]byte) ([]byte, error){
+			"cnfembed": func(d []byte) ([]byte, error) { return cnfembed.ToJSON(d, nil) },
+			"cnfjson":  func(d []byte) ([]byte, error) { return cnfjson.ToJSON(d, nil) },
+		} {
+			got, err := toJSON([]byte(tc.cnf))
+			if err != nil || string(got) != tc.json {
+				t.Errorf("%s: %q = %s, %v; want %s", name, tc.cnf, got, err, tc.json)
+			}
+		}
+	}
+}
