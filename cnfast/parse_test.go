@@ -84,6 +84,18 @@ func TestParseRenderRoundTrip(t *testing.T) {
 		// families record too
 		`a: "x\ny"` + "\n",
 		"a: 'raw'\n",
+
+		// comments after a nested list fence's close trail its
+		// element, at the nested fence's indent
+		"a:\n  ---\n    ---\n    0\n    ---\n    # comment\n  ---\n",
+		"---\n  ---\n  0\n  ---\n  # c\n\n  # d\n---\n1\n---\n",
+
+		// comments ahead of list fence elements of every kind stay
+		// with the element they precede
+		"---\n# c\n0\n---\n",
+		"---\n# c\n\n0\n---\n# d\n1\n---\n",
+		"---\n0\n---\n# d\na: 1\n---\n",
+		"a:\n    ---\n    # c\n    '''\n    x\n    '''\n    ---\n# after\nb: 1\n",
 	}
 	for _, src := range sources {
 		ast, err := Parse([]byte(src), nil)
@@ -99,6 +111,55 @@ func TestParseRenderRoundTrip(t *testing.T) {
 		if string(out) != src {
 			t.Errorf("round trip:\n got %q\nwant %q", out, src)
 		}
+	}
+}
+
+// TestNestedListFenceAfterBlank pins the nested list fence that
+// opens after a blank line: the element records the fence's
+// indent, so the render writes it nested and it reads back.
+func TestNestedListFenceAfterBlank(t *testing.T) {
+	src := "0:\n    ---\n\n        ---\n        0\n        ---\n    ---\n"
+	ast, err := Parse([]byte(src), nil)
+	if err != nil {
+		t.Fatalf("parse: %s", err)
+	}
+	out, err := Render(ast, nil)
+	if err != nil {
+		t.Fatalf("render: %s", err)
+	}
+	back, err := Parse(out, nil)
+	if err != nil {
+		t.Fatalf("render %q does not parse back: %s", out, err)
+	}
+	outer := back.Value.(*Map).Items[0].Value.(*List)
+	if len(outer.Items) != 1 || outer.Items[0].Indent != "    " {
+		t.Fatalf("render %q lost the nested fence", out)
+	}
+}
+
+// TestEmptyListFenceElementAfterBlank pins the error for an element
+// holding only blank or comment lines: it names the delimiter that
+// opened the element, as it does for an element holding nothing.
+func TestEmptyListFenceElementAfterBlank(t *testing.T) {
+	for _, src := range []string{
+		"0:\n    ---\n    []\n    ---\n\n    ---\n",
+		"0:\n    ---\n    []\n    ---\n    # c\n    ---\n",
+	} {
+		_, err := Parse([]byte(src), nil)
+		if want := "4:5: cannot parse empty list fence element"; err == nil || err.Error() != want {
+			t.Errorf("parse %q: err %v, want %q", src, err, want)
+		}
+	}
+}
+
+// TestNestedFenceIndentAfterBlank pins the shared indent of nested
+// fences when one opens after a blank: the check reads the element's
+// first structural line, not the blank ahead of it.
+func TestNestedFenceIndentAfterBlank(t *testing.T) {
+	src := "a:\n  ---\n    ---\n    1\n    ---\n  ---\n\n      ---\n      2\n      ---\n  ---\n"
+	_, err := Parse([]byte(src), nil)
+	if want := "8:7: cannot mix indents inside list fence"; err == nil || err.Error() != want {
+		t.Errorf("parse %q: err %v, want %q", src, err, want)
 	}
 }
 

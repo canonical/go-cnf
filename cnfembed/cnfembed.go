@@ -831,16 +831,6 @@ func (p *parser) parseListFence(next line) (*keyNode, error) {
 			}
 			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
-		// Nested fences must share one indent: the first
-		// sets it, a mismatched one mixes indents inside
-		// the fence.
-		if elem[0].text == "---" && len(elem[0].indent) > len(prefix) {
-			if nested == "" {
-				nested = elem[0].indent
-			} else if elem[0].indent != nested {
-				return nil, errAt(indentPos(elem[0]), "cannot mix indents inside list fence")
-			}
-		}
 		p.pos++
 		sub := &parser{lines: elem}
 		first, ok := sub.peekStruct(prefix)
@@ -850,6 +840,16 @@ func (p *parser) parseListFence(next line) (*keyNode, error) {
 				open = p.lines[start-1]
 			}
 			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
+		}
+		// Nested fences must share one indent: the first
+		// sets it, a mismatched one mixes indents inside
+		// the fence.
+		if first.text == "---" && len(first.indent) > len(prefix) {
+			if nested == "" {
+				nested = first.indent
+			} else if first.indent != nested {
+				return nil, errAt(indentPos(first), "cannot mix indents inside list fence")
+			}
 		}
 		// The fence's prefix delimits the element: a deeper
 		// line opens a nested block only as a list fence.
@@ -868,10 +868,13 @@ func (p *parser) parseListFence(next line) (*keyNode, error) {
 		elems = append(elems, val)
 		// The fence continues while the next line sits at its
 		// prefix or deeper; a shallower line closes it and
-		// stays in the stream for the parent.
+		// stays in the stream for the parent. When it goes on,
+		// the lines passed on the way belong to the next element.
+		mark, pending := p.pos, len(p.pending)
 		if ln, ok := p.peekStruct(prefix); !ok || len(ln.indent) < len(prefix) {
 			return &keyNode{list: true, sub: elems}, nil
 		}
+		p.pos, p.pending = mark, p.pending[:pending]
 	}
 }
 

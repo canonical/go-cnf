@@ -766,15 +766,6 @@ func (p *parser) parseListFence(next line) (Value, error) {
 			}
 			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
-		// Nested fences must share one indent: the first one's opening
-		// --- sets it.
-		if elem[0].text == "---" && len(elem[0].indent) > len(prefix) {
-			if nested == "" {
-				nested = elem[0].indent
-			} else if elem[0].indent != nested {
-				return nil, errAt(indentPos(elem[0]), "cannot mix indents inside list fence")
-			}
-		}
 		p.pos++
 		sub := &parser{lines: elem}
 		// The element may open with comment and blank lines; the
@@ -787,7 +778,22 @@ func (p *parser) parseListFence(next line) (Value, error) {
 			}
 			return nil, errAt(indentPos(open), "cannot parse empty list fence element")
 		}
+		// Nested fences must share one indent: the first one's opening
+		// --- sets it.
+		if first.text == "---" && len(first.indent) > len(prefix) {
+			if nested == "" {
+				nested = first.indent
+			} else if first.indent != nested {
+				return nil, errAt(indentPos(first), "cannot mix indents inside list fence")
+			}
+		}
 		eitem := &Item{}
+		if !isListItem(first.text) && !(first.indent == prefix && looksLikeItem(first.text)) {
+			// A map or dashed list takes the comments ahead of it as its
+			// own; any other element holds them before itself.
+			eitem.PreCmt = cmtOf(sub.pending)
+			sub.pending = nil
+		}
 		if nested != "" {
 			// A nested fence sits one indent deeper than the
 			// fence's delimiters; a flat element adds nothing.
@@ -802,15 +808,21 @@ func (p *parser) parseListFence(next line) (Value, error) {
 			// that comes after the element's value.
 			return nil, errAt(indentPos(sub.lines[sub.pos]), "cannot parse content in list fence element")
 		}
+		// A nested fence's look-ahead may have passed comments after its
+		// close: they trail the element.
+		eitem.PostCmt = cmtOf(sub.pending)
 		eitem.Value = val
 		l.Items = append(l.Items, eitem)
 		// The fence continues while the next structural line sits
 		// at its prefix or deeper; a shallower line closes it
-		// and stays in the stream for the parent.
+		// and stays in the stream for the parent. When it goes on,
+		// the comments passed on the way belong to the next element.
+		mark, pending := p.pos, len(p.pending)
 		ln, ok := p.peekStruct(prefix)
 		if !ok || len(ln.indent) < len(prefix) {
 			return l, nil
 		}
+		p.pos, p.pending = mark, p.pending[:pending]
 	}
 }
 

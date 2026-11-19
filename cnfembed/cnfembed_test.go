@@ -189,6 +189,14 @@ var jsonStr = `
 `
 
 var cnfErrors = []struct{ cnf, error string }{{
+	// Nested fences share one indent, a blank ahead of one or not.
+	cnf:   "a:\n  ---\n    ---\n    1\n    ---\n  ---\n\n      ---\n      2\n      ---\n  ---\n",
+	error: "8:7: cannot mix indents inside list fence",
+}, {
+	// An element holding only a blank is named at the delimiter that opened it.
+	cnf:   "0:\n    ---\n    []\n    ---\n\n    ---\n",
+	error: "4:5: cannot parse empty list fence element",
+}, {
 	cnf:   `a: "x`,
 	error: "1:4: cannot find closing quote",
 }, {
