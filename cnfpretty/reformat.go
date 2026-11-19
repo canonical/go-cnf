@@ -485,6 +485,7 @@ func insert(m *cnfast.Map, item *cnfast.Item) error {
 			if !ok || (!itemMap.Block && len(itemMap.Items) > 0) {
 				return pathErrorf("%scannot merge with previous %s: not a map", itemPos(item), item.Key)
 			}
+			moveMergedCmts(item, itemMap.Items, held)
 			for _, it := range itemMap.Items {
 				if err := insert(heldMap, it); err != nil {
 					return err
@@ -511,6 +512,45 @@ func insert(m *cnfast.Map, item *cnfast.Item) error {
 		item.Indent = defaultIndent
 	}
 	return nil
+}
+
+// moveMergedCmts hands the comments of an item merging into a held
+// key to the items it brings, since the merged line itself is gone:
+// what sat before or on it goes before the first, what closed or
+// followed it after the last. With no items, the held key keeps them.
+func moveMergedCmts(item *cnfast.Item, items []*cnfast.Item, held *cnfast.Item) {
+	in := item.InCmt
+	for i, ln := range in.Text {
+		if i == 0 {
+			in.Text = append([]string(nil), in.Text...)
+		}
+		in.Text[i] = strings.TrimLeft(ln, " \t")
+	}
+	before := joinCmts(item.PreCmt, in, item.HeadCmt)
+	after := joinCmts(item.FootCmt, item.PostCmt)
+	if len(items) == 0 {
+		held.FootCmt = joinCmts(held.FootCmt, before, after)
+		return
+	}
+	items[0].PreCmt = joinCmts(before, items[0].PreCmt)
+	last := items[len(items)-1]
+	last.PostCmt = joinCmts(last.PostCmt, after)
+}
+
+// joinCmts concatenates comment runs in order, positioned at the first
+// that holds anything.
+func joinCmts(runs ...cnfast.Cmt) cnfast.Cmt {
+	var out cnfast.Cmt
+	for _, c := range runs {
+		if len(c.Text) == 0 {
+			continue
+		}
+		if len(out.Text) == 0 {
+			out.Pos = c.Pos
+		}
+		out.Text = append(out.Text, c.Text...)
+	}
+	return out
 }
 
 // prefixes reports whether one key path prefixes another,
@@ -840,6 +880,9 @@ func (p Options) unfoldItem(out *cnfast.Map, item *cnfast.Item, root int) error 
 		InCmt:   item.InCmt,
 		Indent:  defaultIndent,
 	}
+	// The comments move with the value: left on the outer item too, a
+	// foot comment would write twice, and any would hold back a fold.
+	item.HeadCmt, item.FootCmt, item.InCmt = cnfast.Cmt{}, cnfast.Cmt{}, cnfast.Cmt{}
 	if !isBlock(inner.Value) {
 		inner.Indent = "" // an inline or scalar value carries no fresh level
 	}
