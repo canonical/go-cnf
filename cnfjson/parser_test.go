@@ -90,6 +90,10 @@ func TestParseJSONErrors(t *testing.T) {
 		{name: "duplicate nested", in: `{"a":{"b":1,"b":2}}`, want: "cannot redefine key `b`"},
 		{name: "trailing value", in: `{"a":1} {"b":2}`, want: "trailing"},
 		{name: "two documents", in: `1 2`, want: "trailing"},
+		{name: "trailing junk after number", in: `0A0`, want: "trailing"},
+		{name: "trailing junk after map", in: `{"a":1}x`, want: "trailing"},
+		{name: "trailing junk after keyword", in: `truex`, want: "trailing"},
+		{name: "unbalanced close", in: `[1]]`, want: "trailing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := cnfjson.ParseJSON([]byte(tc.in), nil)
