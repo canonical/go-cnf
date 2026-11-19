@@ -297,6 +297,9 @@ func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) 
 		b.WriteString(indent)
 		b.WriteString("---\n")
 		for _, item := range l.Items {
+			if len(item.Key) == 0 {
+				writeCmt(b, item.PreCmt, indent)
+			}
 			if len(item.Key) > 0 {
 				// A keyed element in the fence form renders as its own one-pair
 				// map: the dash spelling has no fence counterpart.
@@ -315,10 +318,12 @@ func writeBlockList(b *strings.Builder, l *List, indent string, head, foot Cmt) 
 				b.WriteString("\n")
 			} else if nested, ok := item.Value.(*List); ok && !nested.Dashed {
 				// A nested list fence opens one indent under the fence;
-				// dashed lists render at the fence's indent.
+				// dashed lists render at the fence's indent. What trails
+				// it sits at its indent too, the only place it reads back.
 				if err := writeBlock(b, item.Value, indent+item.Indent, item.HeadCmt, item.FootCmt); err != nil {
 					return err
 				}
+				writeCmt(b, item.PostCmt, indent+item.Indent)
 			} else if err := writeBlock(b, item.Value, indent, item.HeadCmt, item.FootCmt); err != nil {
 				return err
 			}
