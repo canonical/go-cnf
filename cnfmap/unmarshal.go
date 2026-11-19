@@ -169,6 +169,8 @@ func digitVal(c rune) int {
 		return int(c - '0')
 	case c >= 'a' && c <= 'f':
 		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
 	}
 	return -1
 }

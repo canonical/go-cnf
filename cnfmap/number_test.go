@@ -35,6 +35,10 @@ var unmarshalRangeTests = []struct {
 	in   string
 	want any // float64 to decode, string for the error text
 }{{
+	// hex digits are case-insensitive past 64 bits too
+	in:   "a: 0x2F0000000000000000\n",
+	want: 47 * 0x1p64,
+}, {
 	in:   "a: 1e308\n",
 	want: 1e308,
 }, {
