@@ -18,7 +18,6 @@ package cnfmap
 import (
 	"fmt"
 	"math"
-	"math/big"
 	"strconv"
 	"strings"
 
@@ -111,9 +110,12 @@ func keyPath(item *cnfast.Item) []string {
 
 // parseNumber reads the cnf number spellings. All numbers are
 // IEEE754 doubles underneath. Decimal forms parse through
-// strconv; the other bases round once to the nearest double,
-// as a decimal spelling of the same value would, and like it
-// fail past the double range.
+// strconv; the other bases convert digit by digit, integers
+// within 64 bits converting directly and wider ones rounding
+// to the nearest double - the spec's floor is double precision,
+// and a small decoder meets it without big-number machinery.
+// Past the double range they fail like decimals, since Marshal
+// cannot write an infinity back.
 func parseNumber(s string) (float64, error) {
 	sign := float64(1)
 	text := s
@@ -140,15 +142,34 @@ func parseNumber(s string) (float64, error) {
 		if n, err := strconv.ParseUint(digits, base, 64); err == nil {
 			return sign * float64(n), nil
 		}
+		// Each digit is whole bits. The top 60 or so stay in m,
+		// the rest fold into its lowest bit, which only breaks
+		// ties, so the conversion to float64 rounds once.
+		bits := 4
+		switch base {
+		case 8:
+			bits = 3
+		case 2:
+			bits = 1
+		}
+		var m uint64
+		exp, sticky := 0, false
 		for _, c := range digits {
-			if d := digitVal(c); d < 0 || d >= base {
+			d := digitVal(c)
+			if d < 0 || d >= base {
 				return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 			}
+			if m>>(64-bits) == 0 {
+				m = m<<bits | uint64(d)
+			} else {
+				exp += bits
+				sticky = sticky || d != 0
+			}
 		}
-		// Past 64 bits: digit by digit would round at every step,
-		// drifting off the nearest double.
-		n, _ := new(big.Int).SetString(digits, base)
-		f, _ := new(big.Float).SetInt(n).Float64()
+		if sticky {
+			m |= 1
+		}
+		f := math.Ldexp(float64(m), exp)
 		if math.IsInf(f, 0) {
 			return 0, fmt.Errorf("cannot decode number: %s is out of range for float64", text)
 		}
