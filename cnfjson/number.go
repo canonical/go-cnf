@@ -17,6 +17,7 @@ package cnfjson
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/canonical/go-cnf/cnfast"
@@ -100,10 +101,8 @@ func allDigits(s string) bool {
 }
 
 // baseToDecimal converts a digit string in the given base to
-// its decimal form, by repeated division by 10: each pass
-// walks the digits once, most significant first, carrying the
-// remainder - one decimal digit out per pass, least
-// significant first.
+// its decimal form. math/big converts in subquadratic time, so
+// a wide literal cannot stall the translation.
 func baseToDecimal(digits string, base int) (string, error) {
 	if digits == "" {
 		return "", fmt.Errorf("no digits")
@@ -113,36 +112,11 @@ func baseToDecimal(digits string, base int) (string, error) {
 			return "", fmt.Errorf("bad digit `%s`", cnfast.Escape(string(c)))
 		}
 	}
-	var out []byte
-	for digits != "" {
-		carry := 0
-		var quot []byte
-		for _, c := range digits {
-			v, _ := digitVal(c, base)
-			cur := carry*base + v
-			q := cur / 10
-			if q < 10 {
-				quot = append(quot, '0'+byte(q))
-			} else {
-				quot = append(quot, 'a'+byte(q-10))
-			}
-			carry = cur % 10
-		}
-		// Strip the leading zeros the quotient accumulated; an
-		// empty result means the value hit zero and the loop
-		// ends.
-		i := 0
-		for i < len(quot) && quot[i] == '0' {
-			i++
-		}
-		digits = string(quot[i:])
-		out = append(out, '0'+byte(carry))
+	n, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return "", fmt.Errorf("bad digits `%s`", cnfast.Escape(digits))
 	}
-	// The digits came out least significant first.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return string(out), nil
+	return n.String(), nil
 }
 
 // digitVal reads one digit of the given base, reporting

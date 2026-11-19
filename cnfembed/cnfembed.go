@@ -26,6 +26,7 @@ package cnfembed
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 	"unicode/utf8"
 )
@@ -1494,37 +1495,14 @@ func needsEscape(s string) bool {
 }
 
 // baseToDecimal converts a digit string - already validated
-// by the scanner - to decimal by repeated division by 10:
-// one decimal digit per pass, least significant first.
+// by the scanner - to decimal. math/big converts in subquadratic
+// time, so a wide literal cannot stall the translation.
 func baseToDecimal(digits string, base int) string {
-	var out []byte
-	for digits != "" {
-		carry := 0
-		var quot []byte
-		for _, c := range digits {
-			cur := carry*base + digitVal(c)
-			q := cur / 10
-			if q < 10 {
-				quot = append(quot, '0'+byte(q))
-			} else {
-				quot = append(quot, 'a'+byte(q-10))
-			}
-			carry = cur % 10
-		}
-		// Strip the quotient's leading zeros; an empty
-		// quotient ends the loop.
-		i := 0
-		for i < len(quot) && quot[i] == '0' {
-			i++
-		}
-		digits = string(quot[i:])
-		out = append(out, '0'+byte(carry))
+	n, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		panic("internal error: unvalidated digits " + digits)
 	}
-	// The digits came out least significant first.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return string(out)
+	return n.String()
 }
 
 //
