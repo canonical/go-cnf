@@ -44,6 +44,7 @@ func TestParseJSONRoundTrip(t *testing.T) {
 		{name: "empty array", in: `[]`, out: `[]`},
 		{name: "astral string", in: `"𝄞 clef"`, out: `"𝄞 clef"`},
 		{name: "escaped newline", in: `{"a":"one\ntwo"}`},
+		{name: "crlf lines", in: `{"a":"one\r\ntwo\r\n"}`},
 		{name: "uppercase exponent", in: "1E5", out: `1e5`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
