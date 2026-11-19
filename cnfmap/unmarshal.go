@@ -17,6 +17,7 @@ package cnfmap
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -111,9 +112,10 @@ func keyPath(item *cnfast.Item) []string {
 // IEEE754 doubles underneath. Decimal forms parse through
 // strconv; the other bases convert digit by digit, integers
 // within int64 keeping their exact value and wider ones
-// degrading to the nearest double rather than failing - the
-// spec's floor is double precision, and a small decoder meets
-// it without big-number machinery.
+// rounding to the nearest double - the spec's floor is double
+// precision, and a small decoder meets it without big-number
+// machinery. Past the double range they fail like decimals,
+// since Marshal cannot write an infinity.
 func parseNumber(s string) (float64, error) {
 	sign := float64(1)
 	text := s
@@ -132,9 +134,9 @@ func parseNumber(s string) (float64, error) {
 	}
 	if base != 10 {
 		// Integers within int64 keep their exact value; wider
-		// ones degrade to the nearest float64 rather than
-		// failing - the spec's floor is double precision, and
-		// a tiny parser meets it without big-number machinery.
+		// ones round to the nearest float64 - the spec's floor
+		// is double precision, and a tiny parser meets it
+		// without big-number machinery.
 		if digits == "" {
 			return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 		}
@@ -144,13 +146,36 @@ func parseNumber(s string) (float64, error) {
 		if n, err := strconv.ParseUint(digits, base, 64); err == nil {
 			return sign * float64(n), nil
 		}
-		var f float64
+		// Each digit is whole bits. The top 60 or so stay in m,
+		// the rest fold into its lowest bit, which only breaks
+		// ties, so the conversion to float64 rounds once.
+		bits := 4
+		switch base {
+		case 8:
+			bits = 3
+		case 2:
+			bits = 1
+		}
+		var m uint64
+		exp, sticky := 0, false
 		for _, c := range digits {
 			d := digitVal(c)
 			if d < 0 || d >= base {
 				return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 			}
-			f = f*float64(base) + float64(d)
+			if m>>(64-bits) == 0 {
+				m = m<<bits | uint64(d)
+			} else {
+				exp += bits
+				sticky = sticky || d != 0
+			}
+		}
+		if sticky {
+			m |= 1
+		}
+		f := math.Ldexp(float64(m), exp)
+		if math.IsInf(f, 0) {
+			return 0, fmt.Errorf("cannot decode number: %s is out of range for float64", text)
 		}
 		return sign * f, nil
 	}
