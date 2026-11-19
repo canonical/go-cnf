@@ -111,11 +111,11 @@ func keyPath(item *cnfast.Item) []string {
 // parseNumber reads the cnf number spellings. All numbers are
 // IEEE754 doubles underneath. Decimal forms parse through
 // strconv; the other bases convert digit by digit, integers
-// within 64 bits converting directly and wider ones rounding
-// to the nearest double - the spec's floor is double precision,
-// and a small decoder meets it without big-number machinery.
-// Past the double range they fail like decimals, since Marshal
-// cannot write an infinity back.
+// within int64 keeping their exact value and wider ones
+// rounding to the nearest double - the spec's floor is double
+// precision, and a small decoder meets it without big-number
+// machinery. Past the double range they fail like decimals,
+// since Marshal cannot write an infinity.
 func parseNumber(s string) (float64, error) {
 	sign := float64(1)
 	text := s
@@ -133,6 +133,10 @@ func parseNumber(s string) (float64, error) {
 		base, digits = 2, s[2:]
 	}
 	if base != 10 {
+		// Integers within int64 keep their exact value; wider
+		// ones round to the nearest float64 - the spec's floor
+		// is double precision, and a tiny parser meets it
+		// without big-number machinery.
 		if digits == "" {
 			return 0, fmt.Errorf("cannot parse number `%s`", cnfast.Escape(text))
 		}
