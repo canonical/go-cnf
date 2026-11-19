@@ -102,6 +102,23 @@ func TestParseRenderRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMixedIndentPrefix pins a block prefix mixing tabs and spaces
+// where the parent has no indent of its own to compare against: the
+// prefix must still be one character throughout.
+func TestMixedIndentPrefix(t *testing.T) {
+	for _, tc := range []struct{ src, err string }{
+		{"a:\n\t b: 1\n", "2:3: cannot mix indentation prefixes"},
+		{"a:\n \tb: 1\n", "2:3: cannot mix indentation prefixes"},
+		{"---\n\t ---\n\t 1\n\t ---\n---\n", "2:3: cannot mix indentation prefixes"},
+		{"a:\n    ---\n    \t ---\n    \t 1\n    \t ---\n    ---\n", "3:7: cannot mix indentation prefixes"},
+	} {
+		_, err := Parse([]byte(tc.src), nil)
+		if err == nil || err.Error() != tc.err {
+			t.Errorf("parse %q: err %v, want %q", tc.src, err, tc.err)
+		}
+	}
+}
+
 // TestParseRecords pins the recorded elements of the strings
 // the round trip walks: the element grammar - every element
 // closed by its own terminator or marker, the compact
