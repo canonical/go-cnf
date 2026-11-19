@@ -254,3 +254,80 @@ func TestWriteStrClosingLine(t *testing.T) {
 		}
 	}
 }
+
+// TestFenceLeadingWhitespace pins block fences whose lines open
+// with whitespace other than the indent's own character: the parse
+// reads a line's whole leading run as indent, so the render escapes
+// what the indent cannot hold, escalating raw fences to escaped.
+func TestFenceLeadingWhitespace(t *testing.T) {
+	for _, indent := range []string{"", "  ", "    ", "\t"} {
+		for _, q := range []QuoteKind{SingleFenced, DoubleFenced} {
+			for _, data := range []string{"\tx\n", " x\n", "\t\n", " \n", "  \tx\n", " \tx\n", "x\n\t\n", "\t", " x"} {
+				str := &Str{Data: data, Quote: q, Block: true}
+				root := &Item{Value: str}
+				if indent != "" {
+					root = &Item{Value: &Map{Block: true, Items: []*Item{{
+						Key: []*Str{{Data: "a"}}, Value: str, Indent: indent,
+					}}}}
+				}
+				out, err := Render(root, nil)
+				if err != nil {
+					t.Errorf("indent %q quote %d data %q: render: %s", indent, q, data, err)
+					continue
+				}
+				back, err := Parse(out, nil)
+				if err != nil {
+					t.Errorf("indent %q quote %d data %q: %q does not parse: %s", indent, q, data, out, err)
+					continue
+				}
+				got := back.Value
+				if indent != "" {
+					got = got.(*Map).Items[0].Value
+				}
+				if s, ok := got.(*Str); !ok || s.Data != data {
+					t.Errorf("indent %q quote %d data %q: %q reads back as %#v", indent, q, data, out, got)
+				}
+			}
+		}
+	}
+}
+
+// TestRecordedFenceReindented pins a recorded block fence moved to an
+// indent of the other character: the recorded lines' leading whitespace
+// would read as a mixed indent there, so the fence respells fresh, and
+// reads back the same. A record that still fits writes verbatim.
+func TestRecordedFenceReindented(t *testing.T) {
+	for _, tc := range []struct{ src, indent, want string }{
+		{"a:\n\t'''\n\t\tx\n\t'''\n", "    ", "\tx\n"},
+		{"a:\n    '''\n      x\n    '''\n", "\t", "  x\n"},
+		{"a:\n    \"\"\"\n      x\n    \"\"\"\n", "\t", "  x\n"},
+		{"a:\n\t\"\"\"\n\t\tx\\\n\t\"\"\"\n", "  ", "\tx"},
+	} {
+		root, err := Parse([]byte(tc.src), nil)
+		if err != nil {
+			t.Fatalf("parse %q: %s", tc.src, err)
+		}
+		root.Value.(*Map).Items[0].Indent = tc.indent
+		out, err := Render(root, nil)
+		if err != nil {
+			t.Errorf("%q under %q: render: %s", tc.src, tc.indent, err)
+			continue
+		}
+		back, err := Parse(out, nil)
+		if err != nil {
+			t.Errorf("%q under %q: %q does not parse back: %s", tc.src, tc.indent, out, err)
+			continue
+		}
+		if got := back.Value.(*Map).Items[0].Value.(*Str).Data; got != tc.want {
+			t.Errorf("%q under %q: %q reads back as %q", tc.src, tc.indent, out, got)
+		}
+	}
+
+	src := "a:\n    '''\n    x\n    '''\n"
+	root, _ := Parse([]byte(src), nil)
+	root.Value.(*Map).Items[0].Indent = "\t"
+	out, err := Render(root, nil)
+	if want := "a:\n\t'''\n\tx\n\t'''\n"; err != nil || string(out) != want {
+		t.Errorf("fitting record: %q, %v; want %q", out, err, want)
+	}
+}
